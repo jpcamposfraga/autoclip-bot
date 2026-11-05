@@ -78,4 +78,36 @@ def format_caption(title: str, ai_caption: str) -> str:
     except KeyError:
         return f"{title}\n\n{ai_caption}\n\n{template}"
 
+def load_telegram_config() -> dict:
+    data = _load_config_data()
+    return {
+        "bot_token": data.get("telegram_bot_token", "").strip(),
+        "chat_id": data.get("telegram_chat_id", "").strip()
+    }
+
+def save_telegram_config(bot_token: str, chat_id: str):
+    data = _load_config_data()
+    data["telegram_bot_token"] = bot_token.strip()
+    data["telegram_chat_id"] = chat_id.strip()
+    _save_config_data(data)
+
+def load_peak_hours() -> list[str]:
+    data = _load_config_data()
+    return data.get("peak_hours", ["12:00", "18:00", "21:00"])
+
+def save_peak_hours(hours: list[str]):
+    data = _load_config_data()
+    data["peak_hours"] = hours
+    _save_config_data(data)
+
+def load_monitored_channels() -> list[str]:
+    data = _load_config_data()
+    from scanner import DEFAULT_CHANNELS
+    return data.get("monitored_channels", DEFAULT_CHANNELS)
+
+def save_monitored_channels(channels: list[str]):
+    data = _load_config_data()
+    data["monitored_channels"] = [c.strip() for c in channels if c.strip()]
+    _save_config_data(data)
+
 GEMINI_API_KEY = load_gemini_key()

@@ -9,6 +9,8 @@ import emulator
 import db
 import scheduler
 import metrics
+import telegram_bot
+import scanner
 
 st.set_page_config(
     page_title="AutoClip Factory",
@@ -73,7 +75,29 @@ tab_create, tab_queue, tab_metrics, tab_emulators, tab_settings = st.tabs([
 
 # TAB 1: Criador de Cortes
 with tab_create:
-    st.header("Gerar Cortes Virais a partir do YouTube")
+    with st.container(border=True):
+        st.subheader("🤖 Piloto Automático (Auto-Sourcing + Telegram)")
+        st.caption("Varre canais de filmes do YouTube, identifica ganchos virais, renderiza em 9:16 com legendas e entrega pronto no seu Telegram nos horários de pico (12h, 18h e 21h).")
+        auto_col1, auto_col2 = st.columns([2, 1])
+        with auto_col1:
+            st.info("ℹ️ Os envios ocorrem automaticamente às **12:00, 18:00 e 21:00** se a aplicação estiver aberta.")
+        with auto_col2:
+            auto_btn = st.button("🚀 Buscar e Enviar Agora no Telegram", type="primary", use_container_width=True)
+
+        if auto_btn:
+            status_box = st.status("Iniciando fluxo autônomo completo...", expanded=True)
+            res = scheduler.run_autonomous_pipeline(status_callback=lambda msg: status_box.update(label=msg))
+            if res.get("success"):
+                status_box.update(label="✅ Vídeo gerado e entregue com sucesso no seu Telegram!", state="complete")
+                st.success(f"Vídeo enviado: **{res.get('title')}**")
+                if res.get("path"):
+                    st.video(res.get("path"))
+            else:
+                status_box.update(label=f"❌ Falha: {res.get('error')}", state="error")
+                st.error(res.get("error"))
+
+    st.divider()
+    st.subheader("Ou Gere Manualmente a partir de um Link")
     yt_url = st.text_input(
         "URL do Clipe no YouTube",
         placeholder="https://www.youtube.com/watch?v=..."
@@ -170,6 +194,15 @@ with tab_create:
 
                     btn_c1, btn_c2 = st.columns(2)
                     with btn_c1:
+                        if st.button(f"💬 Enviar no Telegram", key=f"tg_{idx}", type="primary", use_container_width=True):
+                            with st.spinner("Enviando vídeo para o Telegram..."):
+                                formatted_text = config.format_caption(c_title, c_caption)
+                                ok = telegram_bot.send_clip_to_telegram(clip["path"], formatted_text)
+                                if ok:
+                                    st.success("Vídeo entregue no seu Telegram com sucesso!")
+                                else:
+                                    st.error("Falha ao enviar. Verifique o Bot Token e Chat ID na aba Configurações.")
+
                         if selected_device:
                             if st.button(f"📲 Injetar na Galeria", key=f"push_{idx}", use_container_width=True):
                                 if emulator.push_video_to_gallery(selected_device, Path(clip["path"])):
@@ -298,27 +331,68 @@ with tab_emulators:
 
 # TAB 5: Configurações & Templates
 with tab_settings:
-    st.header("⚙️ Configurações de Postagem & Templates")
+    st.header("⚙️ Configurações & Integrações")
+
+    # 1. Telegram
+    st.subheader("📱 Entrega Automática via Telegram")
+    st.caption("Receba os cortes 9:16 renderizados e prontos para postar direto no seu smartphone.")
     
+    tg_cfg = config.load_telegram_config()
+    tg_col1, tg_col2 = st.columns(2)
+    with tg_col1:
+        bot_token_input = st.text_input("Telegram Bot Token", value=tg_cfg["bot_token"], type="password", help="Obtido conversando com o @BotFather no Telegram")
+    with tg_col2:
+        chat_id_input = st.text_input("Seu Chat ID no Telegram", value=tg_cfg["chat_id"], help="Obtenha seu número de ID enviando mensagem para @userinfobot")
+
+    if st.button("🔔 Testar Conexão com Telegram"):
+        if not bot_token_input or not chat_id_input:
+            st.error("Preencha o Token e o Chat ID antes de testar.")
+        else:
+            with st.spinner("Enviando mensagem de teste..."):
+                ok, msg = telegram_bot.test_telegram_connection(bot_token_input, chat_id_input)
+                if ok:
+                    config.save_telegram_config(bot_token_input, chat_id_input)
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+    st.divider()
+
+    # 2. Horários de Pico
+    st.subheader("⏰ Horários Automáticos de Pico")
+    st.caption("Horários do dia em que a IA busca um vídeo novo, gera os cortes e envia no seu Telegram.")
+    
+    current_peak_hours = config.load_peak_hours()
+    peak_hours_str = st.text_input("Horários (formato HH:MM separados por vírgula):", value=", ".join(current_peak_hours))
+
+    # 3. Canais Monitorados
+    st.subheader("📺 Canais Monitorados do YouTube")
+    st.caption("Lista de canais de cenas de filmes em alta resolução monitorados pelo AutoClip.")
+    
+    current_channels = config.load_monitored_channels()
+    channels_text = st.text_area("URLs dos canais (uma por linha):", value="\n".join(current_channels), height=100)
+
+    st.divider()
+
+    # 4. Template de Copywriting
     st.subheader("Template de Título e Legenda")
     st.caption("Variáveis disponíveis: `{title}` (Título do corte) e `{caption}` (Legenda sugerida pela IA).")
     
     current_template = config.load_caption_template()
     new_template = st.text_area("Estrutura do Texto:", value=current_template, height=120)
-    
-    st.subheader("Regras de Frequência de Postagem")
-    sched_cfg = config.load_schedule_config()
-    
-    s_col1, s_col2 = st.columns(2)
-    with s_col1:
-        posts_per_day = st.slider("Máximo de posts por dia", min_value=1, max_value=5, value=sched_cfg["posts_per_day"])
-    with s_col2:
-        interval_hours = st.slider("Intervalo mínimo entre posts (horas)", min_value=1.0, max_value=6.0, value=sched_cfg["interval_hours"], step=0.5)
 
-    if st.button("💾 Salvar Configurações e Templates", type="primary"):
+    if st.button("💾 Salvar Todas as Configurações", type="primary", use_container_width=True):
+        # Save Telegram
+        config.save_telegram_config(bot_token_input, chat_id_input)
+        # Save Peak Hours
+        cleaned_hours = [h.strip() for h in peak_hours_str.split(",") if ":" in h.strip()]
+        config.save_peak_hours(cleaned_hours)
+        # Save Channels
+        cleaned_channels = [c.strip() for c in channels_text.splitlines() if c.strip()]
+        config.save_monitored_channels(cleaned_channels)
+        # Save Template
         config.save_caption_template(new_template)
-        config.save_schedule_config(posts_per_day, interval_hours)
-        st.success("Configurações salvas com sucesso!")
+        st.success("Configurações salvas e aplicadas com sucesso!")
 
     st.divider()
     st.subheader("Pré-visualização do Template Formatado")

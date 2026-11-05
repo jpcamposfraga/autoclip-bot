@@ -65,6 +65,26 @@ def test_db_queue_and_templates():
     assert "My Movie" in formatted and "Watch this clip" in formatted
     print("[OK] Database queue and caption template formatting validated")
 
+def test_scanner_and_telegram_config():
+    import scanner
+    import telegram_bot
+    import db
+    
+    assert len(scanner.DEFAULT_CHANNELS) >= 3
+    hours = config.load_peak_hours()
+    assert "12:00" in hours and "18:00" in hours and "21:00" in hours
+    
+    # Test duplicate prevention in db
+    test_id = "test_yt_unique_123"
+    assert not db.is_source_processed(test_id)
+    db.mark_source_processed(test_id, "Test Title", "Test Channel")
+    assert db.is_source_processed(test_id)
+    
+    # Test graceful telegram validation
+    ok, msg = telegram_bot.test_telegram_connection("", "")
+    assert not ok
+    print("[OK] Auto-scanner, peak hours config and Telegram validation verified")
+
 if __name__ == "__main__":
     import tempfile
     test_config_and_ffmpeg()
@@ -74,4 +94,5 @@ if __name__ == "__main__":
     test_emulator_detection_graceful()
     test_multi_clip_structure()
     test_db_queue_and_templates()
+    test_scanner_and_telegram_config()
     print("\nAll smoke tests passed!")

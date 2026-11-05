@@ -39,6 +39,15 @@ def init_db():
             FOREIGN KEY (post_id) REFERENCES posts_queue(id)
         )
         """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS processed_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            youtube_id TEXT UNIQUE NOT NULL,
+            title TEXT,
+            channel_url TEXT,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         conn.commit()
 
 def enqueue_post(clip_path: str, platform: str, device_serial: str, title: str, caption: str, scheduled_at: str = None) -> int:
@@ -103,5 +112,24 @@ def get_metrics_summary() -> dict:
         """)
         row = cur.fetchone()
         return dict(row) if row else {"total_posts": 0, "total_views": 0, "total_likes": 0, "total_comments": 0}
+
+def is_source_processed(youtube_id: str) -> bool:
+    with get_connection() as conn:
+        cur = conn.execute("SELECT 1 FROM processed_sources WHERE youtube_id = ?", (youtube_id,))
+        return cur.fetchone() is not None
+
+def mark_source_processed(youtube_id: str, title: str = "", channel_url: str = ""):
+    with get_connection() as conn:
+        conn.execute("""
+        INSERT OR IGNORE INTO processed_sources (youtube_id, title, channel_url)
+        VALUES (?, ?, ?)
+        """, (youtube_id, title, channel_url))
+        conn.commit()
+
+def get_processed_sources_count() -> int:
+    with get_connection() as conn:
+        cur = conn.execute("SELECT COUNT(*) as cnt FROM processed_sources")
+        row = cur.fetchone()
+        return row["cnt"] if row else 0
 
 init_db()

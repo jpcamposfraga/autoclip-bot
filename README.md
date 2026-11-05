@@ -6,6 +6,10 @@
 
 ## 🚀 Funcionalidades Principais
 
+- **Piloto Automático & Entrega no Telegram (Horários de Pico):**
+  - Varre canais do YouTube automaticamente sem trabalho manual (`scanner.py`), garantindo zero repetição de vídeos (`processed_sources`).
+  - Dispara nos horários otimizados para máxima entrega do algoritmo: **12:00, 18:00 e 21:00**.
+  - Envia o vídeo renderizado em 9:16 direto para o seu **Telegram**, com título, gancho e hashtags prontas para copiar e postar no smartphone.
 - **Ingestão Rápida com `yt-dlp`:** Baixa automaticamente clipes e cenas em alta definição (1080p).
 - **Detecção de Ganchos com Google Gemini:** Utiliza a API do **Gemini Flash** (com cadeia de fallback resiliente e retentativas automáticas) para identificar os momentos de maior tensão, diálogo e potencial de retenção.
 - **Extração Multi-Cortes (1 a 5 cortes):** Permite configurar e gerar múltiplos cortes virais não sobrepostos a partir de um único vídeo longo.

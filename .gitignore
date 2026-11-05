@@ -1,0 +1,21 @@
+# Media files (downloads & generated vertical clips)
+media/
+*.mp4
+*.mp3
+*.ass
+*.srt
+
+# Sensitive configuration & local database
+config.json
+.env
+*.env
+autoclip.db
+screen.png
+
+# Python cache & environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/

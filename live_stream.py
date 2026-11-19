@@ -38,6 +38,9 @@ def start_circular_buffer(stream_url: str, session_id: int | str = 1) -> tuple[s
         STREAMLINK_BIN,
         "--stdout",
         "--default-stream", "best,720p,480p,worst",
+        "--twitch-disable-ads",
+        "--twitch-disable-hosting",
+        "--twitch-low-latency",
         stream_url
     ]
 

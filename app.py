@@ -9,12 +9,25 @@ import db
 import telegram_bot
 import email_sender
 import live_orchestrator
+import vod_worker
 
 st.set_page_config(
     page_title="AutoClip GTA 6 Factory",
     page_icon="🎬",
     layout="wide"
 )
+
+def render_safe_video(video_path: str):
+    """Serve vídeo com leitura direta de bytes, evitando Video source error do Streamlit."""
+    p = Path(video_path)
+    if p.exists() and p.stat().st_size > 0:
+        try:
+            with open(p, "rb") as f:
+                st.video(f.read())
+        except Exception:
+            st.video(str(p))
+    else:
+        st.warning("Vídeo ainda não disponível ou sendo finalizado.")
 
 # Initialize Session State
 if "gemini_key" not in st.session_state:
@@ -102,7 +115,13 @@ with tab_lives:
                 m_c1, m_c2 = st.columns(2)
                 with m_c1:
                     st.metric("Status", "🟢 Ao Vivo" if is_active else "⚪ Inativo")
-                    st.metric("Espectadores", f"👥 {s_data['viewers']:,}" if s_data['viewers'] > 0 else "👥 --")
+                    if s_data['viewers'] > 0:
+                        v_label = f"👥 {s_data['viewers']:,}"
+                    elif is_active:
+                        v_label = "👥 VOD / Gravado"
+                    else:
+                        v_label = "👥 --"
+                    st.metric("Espectadores", v_label)
                 with m_c2:
                     st.metric("Velocidade Chat", f"💬 {s_data['current_mps']:.1f} m/s")
                     st.metric("Gatilho Exigido", f"🎯 > {s_data['required_mps']:.1f} m/s" if is_active else "🎯 --")
@@ -165,7 +184,7 @@ with tab_lives:
             with st.container(border=True):
                 col_vid, col_info = st.columns([1, 2])
                 with col_vid:
-                    st.video(str(clip_file))
+                    render_safe_video(str(clip_file))
                 with col_info:
                     c_title = clip_file.stem.replace("_vertical", "").replace("live_gta6_", "Corte ")
                     st.markdown(f"**🎬 {c_title}**")
@@ -192,19 +211,36 @@ with tab_lives:
     else:
         st.info("Nenhum corte de live gerado ainda. Inicie o monitoramento em um dos slots acima!")
 
-# TAB 2: Clipar Link/VOD Manual
+# TAB 2: Clipar Link/VOD Manual em Segundo Plano
 with tab_manual:
-    st.subheader("🎬 Criar Cortes Verticais a partir de Link do YouTube")
-    st.caption("Cole o link de uma cena ou gameplay para a IA identificar os melhores momentos, renderizar em 9:16 e enviar imediatamente no Telegram.")
+    st.subheader("🎬 Criar Cortes a partir de Link do YouTube (Processamento em Segundo Plano)")
+    st.caption("O corte roda em segundo plano sem travar o navegador. Você pode alternar abas ou fechar a janela enquanto a IA gera os vídeos e envia no seu Telegram!")
 
-    yt_url = st.text_input("URL do Vídeo no YouTube", placeholder="https://www.youtube.com/watch?v=...")
+    vod_job = vod_worker.get_vod_job_status()
+
+    # Painel de Status do Job em Segundo Plano
+    if vod_job["running"]:
+        with st.container(border=True):
+            st.info(f"⏳ **Trabalho em andamento em segundo plano:** {vod_job['step_label']}")
+            st.caption(f"Processando URL: `{vod_job['url']}`")
+    elif vod_job["done"]:
+        with st.container(border=True):
+            st.success(f"{vod_job['step_label']} (Finalizado às {vod_job.get('completed_at')})")
+            if st.button("🧹 Limpar Histórico do VOD"):
+                vod_worker.clear_vod_job()
+                st.rerun()
+    elif vod_job.get("error"):
+        with st.container(border=True):
+            st.error(f"Erro no processamento anterior: {vod_job['error']}")
+
+    yt_url = st.text_input("URL do Vídeo no YouTube", placeholder="https://www.youtube.com/watch?v=...", disabled=vod_job["running"])
     m_col1, m_col2 = st.columns([1, 1])
     with m_col1:
-        max_clips = st.slider("Quantidade de cortes a extrair", min_value=1, max_value=5, value=2)
+        max_clips = st.slider("Quantidade de cortes a extrair", min_value=1, max_value=5, value=2, disabled=vod_job["running"])
     with m_col2:
         st.write("")
-        auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada corte for gerado", value=True)
-        start_btn = st.button("⚡ Processar e Gerar Cortes 9:16", type="primary", use_container_width=True)
+        auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada corte for gerado", value=True, disabled=vod_job["running"])
+        start_btn = st.button("⚡ Processar em Segundo Plano", type="primary", use_container_width=True, disabled=vod_job["running"])
 
     if start_btn:
         if not yt_url:
@@ -212,45 +248,29 @@ with tab_manual:
         elif not config.load_gemini_keys_pool():
             st.error("Configure sua Gemini API Key na barra lateral.")
         else:
-            status_box = st.status("Iniciando pipeline de corte...", expanded=True)
-            try:
-                status_box.update(label="1/4 Baixando vídeo...")
-                video_id = f"clip_{int(time.time())}"
-                video_path = clipper.download_youtube(yt_url, video_id=video_id)
+            ok, msg = vod_worker.start_vod_job(yt_url, max_clips=max_clips, auto_send_telegram=auto_send_telegram)
+            if ok:
+                st.success(msg)
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(msg)
 
-                status_box.update(label="2/4 Extraindo áudio para análise...")
-                audio_path = clipper.extract_audio(video_path)
-
-                status_box.update(label="3/4 IA identificando ganchos virais e legendas...")
-                clips_data = clipper.analyze_scene_with_gemini(
-                    audio_path,
-                    max_clips=max_clips,
-                    status_callback=lambda msg: status_box.update(label=f"3/4 {msg}")
-                )
-
-                if not clips_data:
-                    raise RuntimeError("Nenhum segmento viral válido foi identificado no áudio fornecido.")
-
-                def _on_clip_done(clip_item):
-                    if auto_send_telegram:
-                        caption = config.format_caption(clip_item.get("title", ""), clip_item.get("caption", ""))
-                        telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
-                        st.toast(f"Corte #{clip_item.get('part')} entregue no Telegram!", icon="🚀")
-
-                status_box.update(label=f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16...")
-                rendered_clips = clipper.render_clips_batch(
-                    video_path=video_path,
-                    clips_data=clips_data,
-                    video_id=video_id,
-                    status_callback=lambda msg: status_box.update(label=f"4/4 {msg}"),
-                    on_clip_rendered_callback=_on_clip_done
-                )
-
-                st.session_state["generated_clips"] = rendered_clips
-                status_box.update(label=f"✅ {len(rendered_clips)} corte(s) concluído(s) e enviados com sucesso!", state="complete")
-            except Exception as e:
-                status_box.update(label=f"❌ Erro durante o processamento: {e}", state="error")
-                st.exception(e)
+    # Exibição dos cortes gerados pelo VOD Worker
+    if vod_job.get("clips"):
+        st.divider()
+        st.subheader(f"🎬 Cortes Gerados ({len(vod_job['clips'])})")
+        for idx, clip in enumerate(vod_job["clips"]):
+            with st.expander(f"Corte #{clip.get('part', idx+1)}: {clip.get('title', 'Sem título')}", expanded=True):
+                p_col1, p_col2 = st.columns([1, 2])
+                with p_col1:
+                    render_safe_video(clip["path"])
+                with p_col2:
+                    st.markdown(f"**Título:** {clip.get('title')}")
+                    st.text_area("Legenda:", value=clip.get("caption", ""), height=75, key=f"vod_cap_{idx}")
+                    if st.button("💬 Reenviar no Telegram", key=f"vod_tg_{idx}", type="primary", use_container_width=True):
+                        telegram_bot.send_clip_to_telegram(clip["path"], clip.get("caption", ""))
+                        st.success("Enviado para o Telegram!")
 
 # TAB 3: Configurações & Telegram
 with tab_settings:

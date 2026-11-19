@@ -20,8 +20,16 @@ def extract_youtube_id(url: str) -> str | None:
             return m.group(1)
     return None
 
+def extract_twitch_channel(url: str) -> str | None:
+    m = re.search(r"twitch\.tv\/([a-zA-Z0-9_]{3,25})", url)
+    if m:
+        ch = m.group(1).lower()
+        if ch not in ["directory", "videos", "p", "popout"]:
+            return ch
+    return None
+
 def fetch_live_viewers(url: str) -> int:
-    """Extrai a quantidade de espectadores ao vivo da live."""
+    """Extrai a quantidade de espectadores simultâneos ao vivo (apenas se a transmissão estiver ativa)."""
     import urllib.request
     try:
         yt_id = extract_youtube_id(url)
@@ -32,14 +40,16 @@ def fetch_live_viewers(url: str) -> int:
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
-            # 1. Tenta originalViewCount
-            orig = re.search(r'"originalViewCount":\s*"(\d+)"', html)
-            if orig:
-                return int(orig.group(1))
-            # 2. Tenta videoViewCountRenderer
-            view_m = re.search(r'"videoViewCountRenderer":\s*\{\s*"viewCount":\s*\{\s*"runs":\s*\[\s*\{\s*"text":\s*"([^"]+)"', html)
-            if view_m:
-                digits = re.sub(r"\D", "", view_m.group(1))
+            # 1. Checa se está de fato transmitindo ao vivo agora
+            is_live = bool(re.search(r'"isLiveNow":\s*true', html))
+            if not is_live:
+                return 0
+
+            # 2. Busca estritamente o bloco com "assistindo agora" ou "watching now"
+            pattern = r'"runs":\s*\[\s*\{\s*"text":\s*"([\d.,]+)"\s*\}\s*,\s*\{\s*"text":\s*"[^"]*(?:assistindo|watching)'
+            m = re.search(pattern, html, re.IGNORECASE)
+            if m:
+                digits = re.sub(r"\D", "", m.group(1))
                 if digits:
                     return int(digits)
     except Exception:
@@ -60,6 +70,7 @@ class ChatSpikeDetector:
         self.is_running = False
         self.error_message = ""
         self._chat_instance = None
+        self._irc_sock = None
         self._thread = None
         self._viewers_thread = None
         self._stop_event = threading.Event()
@@ -73,17 +84,19 @@ class ChatSpikeDetector:
 
     @property
     def effective_min_mps(self) -> float:
-        """Piso mínimo dinâmico baseado no tamanho da audiência."""
+        """Piso mínimo dinâmico com teto de segurança contra valores absurdos."""
         if self.live_viewers > 100:
-            # ex: 1000 viewers -> max(1.8, 2.5) = 2.5; 10.000 viewers -> 25.0
             dynamic_floor = round(self.live_viewers * 0.0025, 1)
-            return max(self.min_mps, dynamic_floor)
+            # Teto de segurança rígido: nunca exigir mais de 35 msg/s
+            capped = min(35.0, dynamic_floor)
+            return max(self.min_mps, capped)
         return self.min_mps
 
     @property
     def required_mps(self) -> float:
         avg = sum(self.baseline_history) / max(1, len(self.baseline_history))
-        return round(max(self.effective_min_mps, avg * self.spike_multiplier), 1)
+        raw_target = max(self.effective_min_mps, avg * self.spike_multiplier)
+        return round(min(35.0, raw_target), 1)
 
     def _calculate_score(self, text: str) -> float:
         score = 1.0
@@ -171,7 +184,54 @@ class ChatSpikeDetector:
                 self._chat_instance = None
             return
 
-        # 2. Twitch ou outros: fallback para chat-downloader
+        # 2. Twitch: Conexão via IRC Nativo (Sem bloqueios, rápido e suporta lives +18)
+        twitch_ch = extract_twitch_channel(self.stream_url)
+        if twitch_ch:
+            print(f"[ChatSpike] Conectando ao chat da Twitch via IRC nativo (#{twitch_ch})...")
+            import socket
+            sock = None
+            try:
+                sock = socket.socket()
+                sock.settimeout(2.0)
+                sock.connect(("irc.chat.twitch.tv", 6667))
+                sock.send(b"PASS oauth:justinfan12345\r\n")
+                sock.send(b"NICK justinfan12345\r\n")
+                sock.send(f"JOIN #{twitch_ch}\r\n".encode("utf-8"))
+                self._irc_sock = sock
+                print(f"[ChatSpike] Chat da Twitch conectado com sucesso! (#{twitch_ch})")
+
+                while not self._stop_event.is_set():
+                    try:
+                        data = sock.recv(2048).decode("utf-8", errors="ignore")
+                        for line in data.split("\r\n"):
+                            if not line:
+                                continue
+                            if line.startswith("PING"):
+                                sock.send(b"PONG :tmi.twitch.tv\r\n")
+                            elif "PRIVMSG" in line:
+                                m = re.search(r":\w+!.*PRIVMSG #\w+ :(.*)", line)
+                                if m:
+                                    self._process_message(m.group(1), on_spike_callback)
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        if not self._stop_event.is_set():
+                            print(f"[ChatSpike] Erro no stream do IRC Twitch: {e}")
+                        break
+            except Exception as e:
+                self.error_message = f"Erro ao conectar ao chat da Twitch: {e}"
+                print(f"[ChatSpike] {self.error_message}")
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                self._irc_sock = None
+                self.is_running = False
+            return
+
+        # 3. Fallback genérico para outras plataformas
         print(f"[ChatSpike] Conectando via chat-downloader ({self.stream_url})...")
         try:
             from chat_downloader import ChatDownloader
@@ -206,4 +266,10 @@ class ChatSpikeDetector:
             except Exception:
                 pass
             self._chat_instance = None
+        if self._irc_sock:
+            try:
+                self._irc_sock.close()
+            except Exception:
+                pass
+            self._irc_sock = None
         self.is_running = False

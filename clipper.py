@@ -243,6 +243,7 @@ def render_vertical_clip(video_path: Path, start_s: float, end_s: float, subtitl
         "-crf", "21",
         "-c:a", "aac",
         "-b:a", "128k",
+        "-movflags", "+faststart",
         str(output_path)
     ]
     subprocess.run(cmd, check=True)

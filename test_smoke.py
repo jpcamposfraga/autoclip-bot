@@ -103,13 +103,18 @@ def test_live_clipper_and_email():
     assert live_stream.LIVE_BUFFER_DIR.exists()
     assert live_stream.STREAMLINK_BIN != ""
 
-    # 3. Chat spike detector scoring & YouTube ID extractor
+    # 3. Chat spike detector scoring, YouTube ID & Twitch channel extractor
     assert chat_spike.extract_youtube_id("https://www.youtube.com/watch?v=aGZ8WGFuqFg") == "aGZ8WGFuqFg"
     assert chat_spike.extract_youtube_id("https://youtu.be/aGZ8WGFuqFg") == "aGZ8WGFuqFg"
+    assert chat_spike.extract_twitch_channel("https://www.twitch.tv/gaules") == "gaules"
     detector = chat_spike.ChatSpikeDetector("https://example.com/live")
     normal_score = detector._calculate_score("Oi tudo bem")
     hype_score = detector._calculate_score("CARALHO WTF KKKKK QUE INSANO")
     assert hype_score > normal_score
+    # Safety cap: even with 5 million viewers, cap is at 35.0 m/s
+    detector.live_viewers = 5_000_000
+    assert detector.effective_min_mps == 35.0
+    assert detector.required_mps == 35.0
 
     # 4. Multi-live orchestrator status & isolated buffers
     all_sessions = live_orchestrator.get_all_sessions_status()
@@ -119,12 +124,14 @@ def test_live_clipper_and_email():
     s2_dir = live_stream.get_session_buffer_dir(2)
     assert s2_dir.exists() and s2_dir.name == "live_2"
 
-    # 5. Duration mode & Multi-key pool
+    # 5. Duration mode & Multi-key pool & VOD worker
+    import vod_worker
+    assert not vod_worker.is_vod_job_running()
     config.save_duration_mode("monetization")
     assert config.load_duration_mode() == "monetization"
     config.save_gemini_keys_pool(["key_a", "key_b"])
     assert config.load_gemini_keys_pool() == ["key_a", "key_b"]
-    print("[OK] Multi-live circular buffers, chat spike, duration modes and Gemini key pool validated")
+    print("[OK] Multi-live circular buffers, Twitch IRC, safety cap, VOD worker and Gemini key pool validated")
 
 if __name__ == "__main__":
     import tempfile

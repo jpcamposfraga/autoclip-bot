@@ -56,16 +56,41 @@ def fetch_live_viewers(url: str) -> int:
         pass
     return 0
 
+SENSITIVITY_PROFILES = {
+    "high": {
+        "name": "🔥 Alta (Mais Clipes)",
+        "multiplier": 1.6,
+        "min_mps": 1.2,
+        "max_trigger": 3.0,
+        "viewer_ratio": 0.00007,
+        "max_viewer_boost": 1.3
+    },
+    "normal": {
+        "name": "⚖️ Equilibrada",
+        "multiplier": 1.9,
+        "min_mps": 1.5,
+        "max_trigger": 4.0,
+        "viewer_ratio": 0.00010,
+        "max_viewer_boost": 1.8
+    },
+    "conservative": {
+        "name": "🎯 Conservadora",
+        "multiplier": 2.4,
+        "min_mps": 2.0,
+        "max_trigger": 5.5,
+        "viewer_ratio": 0.00015,
+        "max_viewer_boost": 2.5
+    }
+}
+
 class ChatSpikeDetector:
-    def __init__(self, stream_url: str, spike_multiplier: float = 2.2, min_mps: float = 1.8, cooldown_seconds: int = 60):
+    def __init__(self, stream_url: str, sensitivity: str = None, cooldown_seconds: int = 50):
         self.stream_url = stream_url
-        self.spike_multiplier = spike_multiplier
-        self.min_mps = min_mps
         self.cooldown_seconds = cooldown_seconds
         
         self.live_viewers = 0
         self.recent_msg_times = deque()
-        self.baseline_history = deque(maxlen=60)
+        self.baseline_history = deque(maxlen=40)
         self.last_spike_time = 0.0
         self.is_running = False
         self.error_message = ""
@@ -74,6 +99,18 @@ class ChatSpikeDetector:
         self._thread = None
         self._viewers_thread = None
         self._stop_event = threading.Event()
+
+        self.set_sensitivity(sensitivity)
+
+    def set_sensitivity(self, sensitivity: str = None):
+        import config
+        self.sensitivity = sensitivity or config.load_spike_sensitivity()
+        profile = SENSITIVITY_PROFILES.get(self.sensitivity, SENSITIVITY_PROFILES["high"])
+        self.spike_multiplier = profile["multiplier"]
+        self.min_mps = profile["min_mps"]
+        self.max_trigger = profile["max_trigger"]
+        self.viewer_ratio = profile["viewer_ratio"]
+        self.max_viewer_boost = profile["max_viewer_boost"]
 
     @property
     def current_mps(self) -> float:
@@ -84,19 +121,18 @@ class ChatSpikeDetector:
 
     @property
     def effective_min_mps(self) -> float:
-        """Piso mínimo dinâmico com teto de segurança contra valores absurdos."""
+        """Piso mínimo calibrado para a dinâmica real de chats do YouTube e Twitch."""
+        base_floor = self.min_mps
         if self.live_viewers > 100:
-            dynamic_floor = round(self.live_viewers * 0.0025, 1)
-            # Teto de segurança rígido: nunca exigir mais de 35 msg/s
-            capped = min(35.0, dynamic_floor)
-            return max(self.min_mps, capped)
-        return self.min_mps
+            viewer_boost = min(self.max_viewer_boost, self.live_viewers * self.viewer_ratio)
+            return round(base_floor + viewer_boost, 1)
+        return round(base_floor, 1)
 
     @property
     def required_mps(self) -> float:
         avg = sum(self.baseline_history) / max(1, len(self.baseline_history))
         raw_target = max(self.effective_min_mps, avg * self.spike_multiplier)
-        return round(min(35.0, raw_target), 1)
+        return round(min(self.max_trigger, raw_target), 1)
 
     def _calculate_score(self, text: str) -> float:
         score = 1.0
@@ -128,15 +164,19 @@ class ChatSpikeDetector:
             self.recent_msg_times.popleft()
 
         mps = len(self.recent_msg_times) / 10.0
-        self.baseline_history.append(mps)
-        avg_mps = sum(self.baseline_history) / max(1, len(self.baseline_history))
+        threshold = self.required_mps
 
-        threshold = max(self.effective_min_mps, avg_mps * self.spike_multiplier)
+        # Só adiciona à baseline quando não estiver no meio de um pico anormal,
+        # impedindo que o gatilho 'fuja' do pico
+        if mps < threshold * 1.1 or not self.baseline_history:
+            self.baseline_history.append(mps)
+
         if mps >= threshold:
             if now - self.last_spike_time >= self.cooldown_seconds:
                 self.last_spike_time = now
                 print(f"[ChatSpike] 🔥 Pico de chat detectado! MPS: {mps:.1f} (Gatilho exigido: {threshold:.1f}, Espectadores: {self.live_viewers})")
                 if on_spike_callback:
+                    avg_mps = sum(self.baseline_history) / max(1, len(self.baseline_history))
                     threading.Thread(
                         target=on_spike_callback,
                         args=({"mps": mps, "avg": avg_mps, "viewers": self.live_viewers, "time": now},),

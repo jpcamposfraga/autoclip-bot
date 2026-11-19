@@ -78,6 +78,12 @@ def get_live_session_status(session_id: int = 1) -> dict:
 def get_all_sessions_status() -> list[dict]:
     return [get_live_session_status(sid) for sid in sorted(_sessions.keys())]
 
+def update_all_detectors_sensitivity(sensitivity: str):
+    for sid, s in _sessions.items():
+        detector = s.get("detector")
+        if detector and hasattr(detector, "set_sensitivity"):
+            detector.set_sensitivity(sensitivity)
+
 def trigger_manual_live_clip(session_id: int = 1) -> tuple[bool, str]:
     """Permite clipar manualmente os últimos 60-70 segundos do buffer sem depender do chat."""
     s = _sessions.get(session_id)

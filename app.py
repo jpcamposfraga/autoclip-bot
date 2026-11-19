@@ -88,6 +88,29 @@ with tab_lives:
         "(qualificado para monetização do TikTok) e dispara instantaneamente para o seu Telegram e do seu amigo!"
     )
 
+    sens_col1, sens_col2 = st.columns([2, 1])
+    with sens_col1:
+        sens_map = {
+            "high": "🔥 Alta (Recomendado - Mais Clipes | Gatilho ~2.0 a 3.0 m/s)",
+            "normal": "⚖️ Equilibrada (Gatilho ~3.0 a 4.0 m/s)",
+            "conservative": "🎯 Conservadora (Apenas Grandes Picos ~4.5+ m/s)"
+        }
+        current_sens = config.load_spike_sensitivity()
+        selected_sens = st.selectbox(
+            "Sensibilidade de Detecção de Picos do Chat:",
+            options=list(sens_map.keys()),
+            format_func=lambda k: sens_map[k],
+            index=list(sens_map.keys()).index(current_sens) if current_sens in sens_map else 0,
+            help="Altera o gatilho exigido de msg/s para disparar os cortes automaticamente."
+        )
+        if selected_sens != current_sens:
+            config.save_spike_sensitivity(selected_sens)
+            live_orchestrator.update_all_detectors_sensitivity(selected_sens)
+            st.rerun()
+    with sens_col2:
+        st.write("")
+        st.info("💡 **Dica**: No modo **Alta**, qualquer reação do chat acima de ~2.2 m/s já dispara o clipe pro Telegram!")
+
     all_statuses = live_orchestrator.get_all_sessions_status()
     any_active = any(s["active"] for s in all_statuses)
 

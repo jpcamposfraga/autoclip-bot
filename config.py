@@ -80,6 +80,15 @@ def save_duration_mode(mode: str):
     data["duration_mode"] = mode
     _save_config_data(data)
 
+def load_spike_sensitivity() -> str:
+    data = _load_config_data()
+    return data.get("spike_sensitivity", "high") # "high", "normal", "conservative"
+
+def save_spike_sensitivity(sensitivity: str):
+    data = _load_config_data()
+    data["spike_sensitivity"] = sensitivity
+    _save_config_data(data)
+
 def load_caption_template() -> str:
     data = _load_config_data()
     return data.get("caption_template", DEFAULT_CAPTION_TEMPLATE)

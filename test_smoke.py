@@ -107,14 +107,19 @@ def test_live_clipper_and_email():
     assert chat_spike.extract_youtube_id("https://www.youtube.com/watch?v=aGZ8WGFuqFg") == "aGZ8WGFuqFg"
     assert chat_spike.extract_youtube_id("https://youtu.be/aGZ8WGFuqFg") == "aGZ8WGFuqFg"
     assert chat_spike.extract_twitch_channel("https://www.twitch.tv/gaules") == "gaules"
-    detector = chat_spike.ChatSpikeDetector("https://example.com/live")
+    detector = chat_spike.ChatSpikeDetector("https://example.com/live", sensitivity="high")
     normal_score = detector._calculate_score("Oi tudo bem")
     hype_score = detector._calculate_score("CARALHO WTF KKKKK QUE INSANO")
     assert hype_score > normal_score
-    # Safety cap: even with 5 million viewers, cap is at 35.0 m/s
+    # Realistic trigger calibration: for 14,000 viewers, target is ~2.2 m/s (not 35 m/s!)
+    detector.live_viewers = 14_000
+    assert 2.0 <= detector.required_mps <= 2.5
+    # Even with 5 million viewers, cap never exceeds max_trigger (3.0 in high mode)
     detector.live_viewers = 5_000_000
-    assert detector.effective_min_mps == 35.0
-    assert detector.required_mps == 35.0
+    assert detector.required_mps <= 3.0
+    # Test dynamic sensitivity switching
+    detector.set_sensitivity("conservative")
+    assert detector.required_mps <= 5.5
 
     # 4. Multi-live orchestrator status & isolated buffers
     all_sessions = live_orchestrator.get_all_sessions_status()
@@ -129,9 +134,11 @@ def test_live_clipper_and_email():
     assert not vod_worker.is_vod_job_running()
     config.save_duration_mode("monetization")
     assert config.load_duration_mode() == "monetization"
+    config.save_spike_sensitivity("high")
+    assert config.load_spike_sensitivity() == "high"
     config.save_gemini_keys_pool(["key_a", "key_b"])
     assert config.load_gemini_keys_pool() == ["key_a", "key_b"]
-    print("[OK] Multi-live circular buffers, Twitch IRC, safety cap, VOD worker and Gemini key pool validated")
+    print("[OK] Multi-live circular buffers, Twitch IRC, realistic spike calibration, VOD worker and Gemini key pool validated")
 
 if __name__ == "__main__":
     import tempfile

@@ -103,7 +103,9 @@ def test_live_clipper_and_email():
     assert live_stream.LIVE_BUFFER_DIR.exists()
     assert live_stream.STREAMLINK_BIN != ""
 
-    # 3. Chat spike detector scoring
+    # 3. Chat spike detector scoring & YouTube ID extractor
+    assert chat_spike.extract_youtube_id("https://www.youtube.com/watch?v=aGZ8WGFuqFg") == "aGZ8WGFuqFg"
+    assert chat_spike.extract_youtube_id("https://youtu.be/aGZ8WGFuqFg") == "aGZ8WGFuqFg"
     detector = chat_spike.ChatSpikeDetector("https://example.com/live")
     normal_score = detector._calculate_score("Oi tudo bem")
     hype_score = detector._calculate_score("CARALHO WTF KKKKK QUE INSANO")

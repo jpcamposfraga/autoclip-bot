@@ -25,35 +25,54 @@ def is_live_session_active() -> bool:
 def get_live_session_status() -> dict:
     detector = _current_session["detector"]
     mps = detector.current_mps if detector else 0.0
+    err = detector.error_message if detector else ""
     return {
         "active": _current_session["active"],
         "stream_url": _current_session["stream_url"],
         "current_mps": mps,
         "clips_count": _current_session["clips_count"],
-        "last_clip_title": _current_session["last_clip_title"]
+        "last_clip_title": _current_session["last_clip_title"],
+        "error_message": err
     }
 
+def trigger_manual_live_clip() -> tuple[bool, str]:
+    """Permite clipar manualmente os últimos 60 segundos do buffer sem depender do pico de chat."""
+    if not _current_session["active"]:
+        return False, "Nenhuma live está sendo monitorada no momento."
+    threading.Thread(target=_process_spike_job, args=({"mps": 99.9, "manual": True},), daemon=True).start()
+    return True, "Corte manual solicitado! Processando os últimos 60 segundos do buffer..."
+
 def _process_spike_job(event_data):
-    print(f"[LiveOrchestrator] Processando pico de chat (MPS: {event_data.get('mps', 0):.1f})...")
-    # Aguarda 12 segundos para a reação do streamer entrar completamente no buffer circular
-    time.sleep(12)
+    is_manual = event_data.get("manual", False)
+    mps_val = event_data.get("mps", 0.0)
+    print(f"[LiveOrchestrator] Processando clipe da live (Manual: {is_manual}, MPS: {mps_val:.1f})...")
+    
+    # Se foi disparado por pico de chat, aguarda 12 segundos para a reação do streamer entrar no buffer
+    if not is_manual:
+        time.sleep(12)
 
     video_id = f"live_gta6_{int(time.time())}"
     raw_snippet = live_stream.LIVE_BUFFER_DIR / f"{video_id}_raw.mp4"
 
     try:
-        # 1. Extrai os últimos 60 segundos do buffer
+        # 1. Extrai os últimos 60 segundos do buffer circular
         live_stream.extract_recent_buffer(raw_snippet, num_chunks=6)
 
         # 2. Extrai áudio para o Gemini
         audio_path = clipper.extract_audio(raw_snippet)
 
-        # 3. Analisa momento viral e ganchos de fala com Gemini
+        # 3. Analisa momento viral e falas com Gemini
         gemini_key = load_gemini_key()
         clips_data = clipper.analyze_scene_with_gemini(audio_path, gemini_key, max_clips=1)
         if not clips_data:
-            print("[LiveOrchestrator] IA não identificou fala clara no trecho.")
-            return
+            print("[LiveOrchestrator] Falas não detectadas. Gerando clipe direto com base na ação da live...")
+            clips_data = [{
+                "start_seconds": 10.0,
+                "end_seconds": 55.0,
+                "title": "Momento Insano GTA 6",
+                "caption": "Momento épico ao vivo no GTA 6! #GTA6 #GTA #Clips #Gamer",
+                "subtitles": []
+            }]
 
         clip_info = clips_data[0]
         output_clip_path = CLIPS_DIR / f"{video_id}_vertical.mp4"

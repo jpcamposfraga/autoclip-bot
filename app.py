@@ -129,6 +129,16 @@ with tab_live:
                 if st.button("🔄 Atualizar Status da Live", use_container_width=True):
                     st.rerun()
 
+            if is_active:
+                st.write("")
+                if st.button("⚡ Clipar Últimos 60s Agora (Manual)", type="primary", use_container_width=True):
+                    ok, msg = live_orchestrator.trigger_manual_live_clip()
+                    if ok:
+                        st.toast(msg, icon="🎬")
+                        st.info("Processando o clipe dos últimos 60 segundos do buffer... Chegará no Telegram em instantes!")
+                    else:
+                        st.error(msg)
+
     with c_right:
         with st.container(border=True):
             st.markdown("### 📊 Telemetria ao Vivo")
@@ -141,6 +151,9 @@ with tab_live:
                 st.metric("Velocidade do Chat", f"{live_status['current_mps']:.1f} msg/s")
                 active_pref = config.load_delivery_channel().capitalize()
                 st.metric("Canal de Entrega", active_pref)
+
+            if live_status.get("error_message"):
+                st.warning(f"⚠️ {live_status['error_message']}")
 
             if is_active and live_status["last_clip_title"]:
                 st.caption(f"Último clipe: **{live_status['last_clip_title']}**")

@@ -28,8 +28,10 @@ def _ensure_watchdog_started():
             _watchdog_thread.start()
 
 def _live_watchdog_loop():
+    last_auto_pilot_check = 0.0
     while True:
         time.sleep(4)
+        # 1. Checa se alguma live ativa foi encerrada pelo streamer
         for sid, s in list(_sessions.items()):
             if not s["active"]:
                 continue
@@ -45,13 +47,50 @@ def _live_watchdog_loop():
                 notif_msg = (
                     f"🔴 *[AutoClip] Live Encerrada!*\n\n"
                     f"A transmissão no *Slot #{sid}* ({stream_url}) foi finalizada pelo streamer.\n\n"
-                    f"👉 O *Slot #{sid}* já está liberado no dashboard para você adicionar outra live:\n"
+                    f"👉 O *Slot #{sid}* já está liberado no dashboard:\n"
                     f"http://localhost:8501"
                 )
                 try:
                     telegram_bot.send_telegram_notification(notif_msg)
                 except Exception as e:
                     print(f"[LiveOrchestrator] Falha ao notificar encerramento no Telegram: {e}")
+
+        # 2. MODO PILOTO AUTOMÁTICO: Preenche slots livres com as maiores lives de GTA 6
+        try:
+            if config.load_auto_pilot_enabled() and (time.time() - last_auto_pilot_check > 30.0):
+                last_auto_pilot_check = time.time()
+                empty_slots = [sid for sid, s in _sessions.items() if not s["active"]]
+                if empty_slots:
+                    import stream_scanner
+                    discovered = stream_scanner.discover_top_gta6_lives(limit=6)
+                    active_urls = {s["stream_url"] for s in _sessions.values() if s["active"]}
+
+                    for live in discovered:
+                        if not empty_slots:
+                            break
+                        l_url = live["url"]
+                        if l_url not in active_urls:
+                            slot_to_fill = empty_slots.pop(0)
+                            channel_name = live.get("channel", "Streamer")
+                            viewers = live.get("viewers", 0)
+                            print(f"[AutoPilot] Preenchendo Slot #{slot_to_fill} com {channel_name} ({l_url}) - {viewers} espectadores...")
+                            success, msg = start_live_session(l_url, session_id=slot_to_fill)
+                            if success:
+                                active_urls.add(l_url)
+                                ap_msg = (
+                                    f"🤖 *[Piloto Automático GTA 6]* Nova Live Alocada!\n\n"
+                                    f"🎮 *Canal:* {channel_name}\n"
+                                    f"👥 *Audiência:* ~{viewers:,} espectadores\n"
+                                    f"🕹️ *Slot:* #{slot_to_fill}\n"
+                                    f"🔗 {l_url}\n\n"
+                                    f"⚡ O bot já está capturando o chat e pronto para gerar os clipes automaticamente!"
+                                )
+                                try:
+                                    telegram_bot.send_telegram_notification(ap_msg)
+                                except Exception as e:
+                                    print(f"[AutoPilot] Falha ao notificar auto-piloto no Telegram: {e}")
+        except Exception as e:
+            print(f"[LiveOrchestrator] Erro no ciclo do piloto automático: {e}")
 
 def is_live_session_active(session_id: int = 1) -> bool:
     return _sessions.get(session_id, {}).get("active", False)
@@ -246,3 +285,7 @@ def stop_live_session(session_id: int = 1, manual: bool = True):
 def stop_all_sessions():
     for sid in _sessions:
         stop_live_session(sid)
+
+# Inicia o monitor watchdog automaticamente em segundo plano
+_ensure_watchdog_started()
+

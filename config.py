@@ -89,6 +89,15 @@ def save_spike_sensitivity(sensitivity: str):
     data["spike_sensitivity"] = sensitivity
     _save_config_data(data)
 
+def load_auto_pilot_enabled() -> bool:
+    data = _load_config_data()
+    return bool(data.get("auto_pilot_enabled", False))
+
+def save_auto_pilot_enabled(enabled: bool):
+    data = _load_config_data()
+    data["auto_pilot_enabled"] = bool(enabled)
+    _save_config_data(data)
+
 def load_caption_template() -> str:
     data = _load_config_data()
     return data.get("caption_template", DEFAULT_CAPTION_TEMPLATE)

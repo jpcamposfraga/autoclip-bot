@@ -19,11 +19,13 @@ def test_ass_generation(tmp_path: Path):
         {"start": 12.5, "end": 15.0, "text": "Testing subtitles"}
     ]
     out_file = tmp_path / "test.ass"
-    clipper.create_ass_subtitles(sample_subs, offset_seconds=10.0, output_path=out_file)
+    clipper.create_ass_subtitles(sample_subs, offset_seconds=10.0, output_path=out_file, part_label="PARTE 1 DE 3")
     assert out_file.exists()
     content = out_file.read_text(encoding="utf-8")
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello world" in content
-    print("[OK] ASS subtitle generation verified")
+    assert "Style: PartBadge" in content
+    assert "📌 PARTE 1 DE 3" in content
+    print("[OK] ASS subtitle generation with PartBadge overlay verified")
 
 def test_emulator_detection_graceful():
     devices = emulator.get_connected_devices()
@@ -138,7 +140,16 @@ def test_live_clipper_and_email():
     assert config.load_spike_sensitivity() == "high"
     config.save_gemini_keys_pool(["key_a", "key_b"])
     assert config.load_gemini_keys_pool() == ["key_a", "key_b"]
-    print("[OK] Multi-live circular buffers, Twitch IRC, realistic spike calibration, VOD worker and Gemini key pool validated")
+
+    # 6. Piloto Automático & Scanner de Lives de GTA 6
+    import stream_scanner
+    assert len(stream_scanner.TOP_CREATOR_CHANNELS) >= 5
+    config.save_auto_pilot_enabled(True)
+    assert config.load_auto_pilot_enabled() is True
+    config.save_auto_pilot_enabled(False)
+    assert config.load_auto_pilot_enabled() is False
+
+    print("[OK] Multi-live circular buffers, Twitch IRC, realistic spike calibration, VOD worker, Auto-Pilot & Gemini key pool validated")
 
 if __name__ == "__main__":
     import tempfile

@@ -35,7 +35,7 @@ def clear_vod_job():
 def _set_step(label: str):
     _current_job["step_label"] = label
 
-def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
+def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool, sequential_story: bool = True):
     try:
         _current_job["running"] = True
         _current_job["done"] = False
@@ -50,13 +50,14 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
         _current_job["step_label"] = "2/4 Extraindo áudio para análise..."
         audio_path = clipper.extract_audio(video_path)
 
-        _current_job["step_label"] = "3/4 IA identificando ganchos virais e legendas..."
+        _current_job["step_label"] = "3/4 IA identificando ganchos virais e sequência narrativa..."
         clips_data = None
         try:
             clips_data = clipper.analyze_scene_with_gemini(
                 audio_path,
                 max_clips=max_clips,
-                status_callback=lambda msg: _set_step(f"3/4 {msg}")
+                status_callback=lambda msg: _set_step(f"3/4 {msg}"),
+                sequential_story=sequential_story
             )
         except Exception as e:
             print(f"[VODWorker] Aviso na análise IA ({e}). Usando Plano B...")
@@ -64,7 +65,8 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
         if not clips_data:
             # Plano B: corte heurístico
             out_clip = CLIPS_DIR / f"{video_id}_part1.mp4"
-            clip_info = clipper.generate_offline_action_clip(video_path, out_clip)
+            part_label = "PARTE 1 DE 1" if sequential_story else None
+            clip_info = clipper.generate_offline_action_clip(video_path, out_clip, part_label=part_label)
             clip_info["path"] = str(out_clip)
             clip_info["part"] = 1
             if auto_send_telegram:
@@ -79,13 +81,14 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
                     tg_ok = telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
                     clip_item["telegram_sent"] = tg_ok
 
-            _current_job["step_label"] = f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16..."
+            _current_job["step_label"] = f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16 com badges e legendas..."
             rendered_clips = clipper.render_clips_batch(
                 video_path=video_path,
                 clips_data=clips_data,
                 video_id=video_id,
                 status_callback=lambda msg: _set_step(f"4/4 {msg}"),
-                on_clip_rendered_callback=_on_clip_done
+                on_clip_rendered_callback=_on_clip_done,
+                sequential_story=sequential_story
             )
 
         _current_job["clips"] = rendered_clips
@@ -106,13 +109,13 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
     finally:
         _current_job["running"] = False
 
-def start_vod_job(url: str, max_clips: int = 2, auto_send_telegram: bool = True) -> tuple[bool, str]:
+def start_vod_job(url: str, max_clips: int = 2, auto_send_telegram: bool = True, sequential_story: bool = True) -> tuple[bool, str]:
     if _current_job["running"]:
         return False, "Já existe um processamento de VOD em andamento em segundo plano."
 
     t = threading.Thread(
         target=_run_vod_pipeline,
-        args=(url, max_clips, auto_send_telegram),
+        args=(url, max_clips, auto_send_telegram, sequential_story),
         daemon=True
     )
     t.start()

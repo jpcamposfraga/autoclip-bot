@@ -114,6 +114,50 @@ with tab_lives:
     all_statuses = live_orchestrator.get_all_sessions_status()
     any_active = any(s["active"] for s in all_statuses)
 
+    # Painel do Piloto Automático e Descoberta de Lives
+    ap_col1, ap_col2 = st.columns([2, 1])
+    with ap_col1:
+        auto_pilot_current = config.load_auto_pilot_enabled()
+        auto_pilot_toggle = st.toggle(
+            "🤖 Piloto Automático GTA 6 (Preencher slots livres automaticamente)",
+            value=auto_pilot_current,
+            help="Varre periodicamente os maiores canais (Coringa, Davy Jones, Paulinho, Lipão, etc.) e o YouTube, alocando lives de GTA 6 em slots livres sem intervenção manual!"
+        )
+        if auto_pilot_toggle != auto_pilot_current:
+            config.save_auto_pilot_enabled(auto_pilot_toggle)
+            st.rerun()
+    with ap_col2:
+        if st.button("🔍 Escanear Lives de GTA 6 Agora", use_container_width=True):
+            with st.spinner("Procurando maiores transmissões de GTA 6..."):
+                import stream_scanner
+                found_lives = stream_scanner.discover_top_gta6_lives(limit=5)
+                st.session_state["discovered_lives"] = found_lives
+
+    if st.session_state.get("discovered_lives"):
+        with st.expander(f"📡 Lives de GTA 6 Encontradas ({len(st.session_state['discovered_lives'])})", expanded=True):
+            for d_idx, live_item in enumerate(st.session_state["discovered_lives"]):
+                l_col1, l_col2, l_col3 = st.columns([2, 1, 1])
+                with l_col1:
+                    st.markdown(f"**{live_item.get('channel', 'Streamer')}** - *{live_item.get('title')}*")
+                    st.caption(live_item.get("url"))
+                with l_col2:
+                    st.metric("Audiência", f"👥 ~{live_item.get('viewers', 0):,} viewers")
+                with l_col3:
+                    empty_slots = [s["session_id"] for s in all_statuses if not s["active"]]
+                    if empty_slots:
+                        target_sid = empty_slots[0]
+                        if st.button(f"▶️ Alocar Slot #{target_sid}", key=f"btn_alloc_{d_idx}"):
+                            with st.spinner(f"Iniciando Live #{target_sid}..."):
+                                ok, msg = live_orchestrator.start_live_session(live_item["url"], session_id=target_sid)
+                                if ok:
+                                    st.success(f"Slot #{target_sid} iniciado com {live_item.get('channel')}!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                    else:
+                        st.caption("Todos os 3 slots ocupados")
+
     col1, col2, col3 = st.columns(3)
     cols = [col1, col2, col3]
 
@@ -259,7 +303,13 @@ with tab_manual:
     yt_url = st.text_input("URL do Vídeo no YouTube", placeholder="https://www.youtube.com/watch?v=...", disabled=vod_job["running"])
     m_col1, m_col2 = st.columns([1, 1])
     with m_col1:
-        max_clips = st.slider("Quantidade de cortes a extrair", min_value=1, max_value=5, value=2, disabled=vod_job["running"])
+        max_clips = st.slider("Quantidade de cortes a extrair", min_value=1, max_value=5, value=3, disabled=vod_job["running"])
+        sequential_story = st.checkbox(
+            "📖 Modo Minissérie Sequencial (Storytelling & Badges Parte 1, Parte 2...)",
+            value=True,
+            disabled=vod_job["running"],
+            help="Cria uma sequência narrativa com arcos dramáticos, badge '📌 PARTE X DE Y' visível no vídeo e ganchos de chamada para o perfil nos comentários/legendas."
+        )
     with m_col2:
         st.write("")
         auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada corte for gerado", value=True, disabled=vod_job["running"])
@@ -271,7 +321,7 @@ with tab_manual:
         elif not config.load_gemini_keys_pool():
             st.error("Configure sua Gemini API Key na barra lateral.")
         else:
-            ok, msg = vod_worker.start_vod_job(yt_url, max_clips=max_clips, auto_send_telegram=auto_send_telegram)
+            ok, msg = vod_worker.start_vod_job(yt_url, max_clips=max_clips, auto_send_telegram=auto_send_telegram, sequential_story=sequential_story)
             if ok:
                 st.success(msg)
                 time.sleep(1)
@@ -284,7 +334,8 @@ with tab_manual:
         st.divider()
         st.subheader(f"🎬 Cortes Gerados ({len(vod_job['clips'])})")
         for idx, clip in enumerate(vod_job["clips"]):
-            with st.expander(f"Corte #{clip.get('part', idx+1)}: {clip.get('title', 'Sem título')}", expanded=True):
+            badge_title = clip.get('part_label') or f"PARTE {clip.get('part', idx+1)}"
+            with st.expander(f"📌 {badge_title}: {clip.get('title', 'Sem título')}", expanded=True):
                 p_col1, p_col2 = st.columns([1, 2])
                 with p_col1:
                     render_safe_video(clip["path"])

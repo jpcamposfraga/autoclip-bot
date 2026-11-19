@@ -110,4 +110,32 @@ def save_monitored_channels(channels: list[str]):
     data["monitored_channels"] = [c.strip() for c in channels if c.strip()]
     _save_config_data(data)
 
+def load_email_config() -> dict:
+    data = _load_config_data()
+    return {
+        "sender_email": data.get("sender_email", "").strip(),
+        "sender_password": data.get("sender_password", "").strip(),
+        "recipient_email": data.get("recipient_email", "").strip(),
+        "smtp_server": data.get("smtp_server", "smtp.gmail.com").strip(),
+        "smtp_port": int(data.get("smtp_port", 587))
+    }
+
+def save_email_config(sender_email: str, sender_password: str, recipient_email: str, smtp_server: str = "smtp.gmail.com", smtp_port: int = 587):
+    data = _load_config_data()
+    data["sender_email"] = sender_email.strip()
+    data["sender_password"] = sender_password.strip()
+    data["recipient_email"] = recipient_email.strip()
+    data["smtp_server"] = smtp_server.strip()
+    data["smtp_port"] = int(smtp_port)
+    _save_config_data(data)
+
+def load_delivery_channel() -> str:
+    data = _load_config_data()
+    return data.get("delivery_channel", "both") # "email", "telegram", "both"
+
+def save_delivery_channel(channel: str):
+    data = _load_config_data()
+    data["delivery_channel"] = channel
+    _save_config_data(data)
+
 GEMINI_API_KEY = load_gemini_key()

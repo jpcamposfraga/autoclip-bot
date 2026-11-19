@@ -77,18 +77,32 @@ def run_autonomous_pipeline(status_callback=None) -> dict:
     clip = rendered_clips[0]
     final_caption = config.format_caption(clip.get("title", ""), clip.get("caption", ""))
 
-    # 5. Send to Telegram
-    telegram_cfg = config.load_telegram_config()
+    # 5. Delivery (Telegram and/or E-mail)
+    delivery_mode = config.load_delivery_channel()
     sent_telegram = False
-    if telegram_cfg.get("bot_token") and telegram_cfg.get("chat_id"):
+    sent_email = False
+
+    if delivery_mode in ["email", "both"]:
+        import email_sender
         if status_callback:
-            status_callback("Enviando vídeo para o seu Telegram...")
-        sent_telegram = telegram_bot.send_clip_to_telegram(
+            status_callback("Enviando vídeo para o seu E-mail...")
+        sent_email, email_msg = email_sender.send_clip_by_email(
             video_path=clip["path"],
-            caption=final_caption,
-            bot_token=telegram_cfg["bot_token"],
-            chat_id=telegram_cfg["chat_id"]
+            title=clip.get("title", "Corte Automático"),
+            caption=final_caption
         )
+
+    if delivery_mode in ["telegram", "both"]:
+        telegram_cfg = config.load_telegram_config()
+        if telegram_cfg.get("bot_token") and telegram_cfg.get("chat_id"):
+            if status_callback:
+                status_callback("Enviando vídeo para o seu Telegram...")
+            sent_telegram = telegram_bot.send_clip_to_telegram(
+                video_path=clip["path"],
+                caption=final_caption,
+                bot_token=telegram_cfg["bot_token"],
+                chat_id=telegram_cfg["chat_id"]
+            )
 
     # 6. Mark scene as processed to prevent duplicates
     db.mark_source_processed(scene["id"], scene["title"], scene.get("channel", ""))
@@ -99,7 +113,8 @@ def run_autonomous_pipeline(status_callback=None) -> dict:
         "caption": final_caption,
         "path": clip["path"],
         "source_url": scene["url"],
-        "telegram_sent": sent_telegram
+        "telegram_sent": sent_telegram,
+        "email_sent": sent_email
     }
 
 def process_due_posts_once(force: bool = False) -> str:

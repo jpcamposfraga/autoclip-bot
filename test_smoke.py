@@ -75,7 +75,8 @@ def test_scanner_and_telegram_config():
     assert "12:00" in hours and "18:00" in hours and "21:00" in hours
     
     # Test duplicate prevention in db
-    test_id = "test_yt_unique_123"
+    import time
+    test_id = f"test_yt_unique_{time.time()}"
     assert not db.is_source_processed(test_id)
     db.mark_source_processed(test_id, "Test Title", "Test Channel")
     assert db.is_source_processed(test_id)
@@ -84,6 +85,33 @@ def test_scanner_and_telegram_config():
     ok, msg = telegram_bot.test_telegram_connection("", "")
     assert not ok
     print("[OK] Auto-scanner, peak hours config and Telegram validation verified")
+
+def test_live_clipper_and_email():
+    import email_sender
+    import live_stream
+    import chat_spike
+    import live_orchestrator
+
+    # 1. Email validation
+    ok, msg = email_sender.test_email_connection("", "", "")
+    assert not ok
+    assert "Preencha todos os campos" in msg
+
+    # 2. Live buffer dir & streamlink resolution
+    assert live_stream.LIVE_BUFFER_DIR.exists()
+    assert live_stream.STREAMLINK_BIN != ""
+
+    # 3. Chat spike detector scoring
+    detector = chat_spike.ChatSpikeDetector("https://example.com/live")
+    normal_score = detector._calculate_score("Oi tudo bem")
+    hype_score = detector._calculate_score("CARALHO WTF KKKKK QUE INSANO")
+    assert hype_score > normal_score
+
+    # 4. Live orchestrator status
+    status = live_orchestrator.get_live_session_status()
+    assert not status["active"]
+    assert status["clips_count"] == 0
+    print("[OK] Live circular buffer, chat spike scoring and email sender validated")
 
 if __name__ == "__main__":
     import tempfile
@@ -95,4 +123,5 @@ if __name__ == "__main__":
     test_multi_clip_structure()
     test_db_queue_and_templates()
     test_scanner_and_telegram_config()
+    test_live_clipper_and_email()
     print("\nAll smoke tests passed!")

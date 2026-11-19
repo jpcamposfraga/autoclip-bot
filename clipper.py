@@ -100,7 +100,7 @@ Return ONLY a JSON object adhering to this structure:
     
     raise RuntimeError(f"Todos os modelos do Gemini falharam ou estão indisponíveis temporariamente: {last_error}")
 
-def render_clips_batch(video_path: Path, clips_data: list[dict], video_id: str, status_callback=None) -> list[dict]:
+def render_clips_batch(video_path: Path, clips_data: list[dict], video_id: str, status_callback=None, on_clip_rendered_callback=None) -> list[dict]:
     rendered = []
     total = len(clips_data)
     for idx, clip in enumerate(clips_data):
@@ -120,6 +120,13 @@ def render_clips_batch(video_path: Path, clips_data: list[dict], video_id: str, 
         clip_item["path"] = str(output_clip_path)
         clip_item["part"] = part_num
         rendered.append(clip_item)
+
+        if on_clip_rendered_callback:
+            try:
+                on_clip_rendered_callback(clip_item)
+            except Exception as e:
+                print(f"[Clipper] Erro no callback de pós-renderização: {e}")
+
     return rendered
 
 def _format_ass_time(seconds: float) -> str:

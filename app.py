@@ -222,7 +222,7 @@ with tab_create:
         max_clips = st.slider("Máximo de cortes a extrair", min_value=1, max_value=5, value=3)
     with col2:
         st.write("")
-        st.write("")
+        auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada clipe for gerado", value=True)
         start_btn = st.button("⚡ Processar e Gerar Cortes 9:16", type="primary", use_container_width=True)
 
     if start_btn:
@@ -254,17 +254,25 @@ with tab_create:
                 if not clips_data:
                     raise RuntimeError("Nenhum segmento viral válido foi identificado no áudio fornecido.")
 
+                # Callback para envio imediato à medida que cada vídeo for renderizado
+                def _on_clip_done(clip_item):
+                    if auto_send_telegram:
+                        caption = config.format_caption(clip_item.get("title", ""), clip_item.get("caption", ""))
+                        telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
+                        st.toast(f"Corte #{clip_item.get('part')} entregue no Telegram!", icon="🚀")
+
                 # 4. Renderização Vertical em Lote
                 status_box.update(label=f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16 com legendas...")
                 rendered_clips = clipper.render_clips_batch(
                     video_path=video_path,
                     clips_data=clips_data,
                     video_id=video_id,
-                    status_callback=lambda msg: status_box.update(label=f"4/4 {msg}")
+                    status_callback=lambda msg: status_box.update(label=f"4/4 {msg}"),
+                    on_clip_rendered_callback=_on_clip_done
                 )
 
                 st.session_state["generated_clips"] = rendered_clips
-                status_box.update(label=f"✅ {len(rendered_clips)} corte(s) concluído(s) com sucesso!", state="complete")
+                status_box.update(label=f"✅ {len(rendered_clips)} corte(s) concluído(s) e enviados com sucesso!", state="complete")
             except Exception as e:
                 status_box.update(label=f"❌ Erro durante o processamento: {e}", state="error")
                 st.exception(e)
@@ -503,21 +511,42 @@ with tab_settings:
     st.divider()
 
     # 2. Telegram
-    st.subheader("📱 Entrega Automática via Telegram")
-    st.caption("Receba os cortes renderizados direto no Telegram.")
-    
+    st.subheader("📱 Entrega Automática via Telegram (Multi-Usuário)")
+    st.caption("Receba os cortes renderizados em tempo real no seu smartphone e de mais pessoas.")
+
+    with st.expander("💡 Como configurar o envio para 2 ou mais pessoas (Passo a Passo)", expanded=False):
+        st.markdown("""
+1. **Criar o Bot (se ainda não tiver):**
+   - No Telegram, procure por `@BotFather` e envie `/newbot`.
+   - Escolha o nome e o username do bot (deve terminar com `bot`, ex: `MeuClipperBot`).
+   - Copie o **Token HTTP API** e cole no campo abaixo.
+2. **PASSO CRÍTICO: Dar /start no Bot:**
+   - **Você** deve abrir a conversa com seu bot no Telegram e clicar em **/start**.
+   - **A outra pessoa** também DEVE abrir a conversa com o mesmo bot e clicar em **/start**.  
+   *(Se alguém esquecer de dar `/start`, o Telegram bloqueia o envio dessa pessoa por segurança).*
+3. **Descobrir o Chat ID de cada um:**
+   - Você e a outra pessoa devem enviar qualquer mensagem para o bot `@userinfobot` no Telegram.
+   - Ele responderá com o número de `Id` (ex: `123456789`).
+4. **Inserir os IDs:**
+   - Digite os dois IDs separados por vírgula no campo abaixo (ex: `123456789, 987654321`).
+        """)
+
     tg_cfg = config.load_telegram_config()
     tg_col1, tg_col2 = st.columns(2)
     with tg_col1:
-        bot_token_input = st.text_input("Telegram Bot Token", value=tg_cfg["bot_token"], type="password", help="Obtido conversando com o @BotFather no Telegram")
+        bot_token_input = st.text_input("Telegram Bot Token", value=tg_cfg["bot_token"], type="password", help="Token fornecido pelo @BotFather")
     with tg_col2:
-        chat_id_input = st.text_input("Seu Chat ID no Telegram", value=tg_cfg["chat_id"], help="Obtenha seu número de ID enviando mensagem para @userinfobot")
+        chat_id_input = st.text_input(
+            "Chat IDs (separados por vírgula)",
+            value=tg_cfg["chat_id"],
+            help="Insira os números de ID de todos os destinatários separados por vírgula (ex: 123456789, 987654321)"
+        )
 
     if st.button("🔔 Testar Conexão com Telegram"):
         if not bot_token_input or not chat_id_input:
-            st.error("Preencha o Token e o Chat ID antes de testar.")
+            st.error("Preencha o Token e pelo menos um Chat ID antes de testar.")
         else:
-            with st.spinner("Enviando mensagem de teste..."):
+            with st.spinner("Enviando mensagem de teste para todos os destinatários..."):
                 ok, msg = telegram_bot.test_telegram_connection(bot_token_input, chat_id_input)
                 if ok:
                     config.save_telegram_config(bot_token_input, chat_id_input)

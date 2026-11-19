@@ -84,6 +84,8 @@ def test_scanner_and_telegram_config():
     # Test graceful telegram validation
     ok, msg = telegram_bot.test_telegram_connection("", "")
     assert not ok
+    ids = telegram_bot.parse_chat_ids("12345, 67890\n99999")
+    assert ids == ["12345", "67890", "99999"]
     print("[OK] Auto-scanner, peak hours config and Telegram validation verified")
 
 def test_live_clipper_and_email():

@@ -267,10 +267,22 @@ with tab_manual:
                     render_safe_video(clip["path"])
                 with p_col2:
                     st.markdown(f"**Título:** {clip.get('title')}")
-                    st.text_area("Legenda:", value=clip.get("caption", ""), height=75, key=f"vod_cap_{idx}")
-                    if st.button("💬 Reenviar no Telegram", key=f"vod_tg_{idx}", type="primary", use_container_width=True):
-                        telegram_bot.send_clip_to_telegram(clip["path"], clip.get("caption", ""))
-                        st.success("Enviado para o Telegram!")
+                    if clip.get("telegram_sent"):
+                        st.success("✅ Entregue no Telegram")
+                    else:
+                        st.info("ℹ️ Vídeo pronto para envio")
+
+                    caption_val = st.text_area("Legenda:", value=clip.get("caption", ""), height=75, key=f"vod_cap_{idx}")
+                    if st.button("💬 Enviar no Telegram", key=f"vod_tg_{idx}", type="primary", use_container_width=True):
+                        with st.spinner("Enviando vídeo para o Telegram..."):
+                            sent = telegram_bot.send_clip_to_telegram(clip["path"], caption_val)
+                            if sent:
+                                clip["telegram_sent"] = True
+                                st.success("✅ Enviado para o Telegram com sucesso!")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("❌ Falha no envio para o Telegram. Verifique os Chat IDs na aba Configurações.")
 
 # TAB 3: Configurações & Telegram
 with tab_settings:

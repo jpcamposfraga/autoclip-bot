@@ -12,10 +12,46 @@ import telegram_bot
 MAX_SESSIONS = 3
 
 _sessions = {
-    1: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
-    2: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
-    3: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
+    1: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None, "started_at": 0},
+    2: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None, "started_at": 0},
+    3: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None, "started_at": 0},
 }
+
+_watchdog_thread = None
+_watchdog_lock = threading.Lock()
+
+def _ensure_watchdog_started():
+    global _watchdog_thread
+    with _watchdog_lock:
+        if _watchdog_thread is None or not _watchdog_thread.is_alive():
+            _watchdog_thread = threading.Thread(target=_live_watchdog_loop, daemon=True)
+            _watchdog_thread.start()
+
+def _live_watchdog_loop():
+    while True:
+        time.sleep(4)
+        for sid, s in list(_sessions.items()):
+            if not s["active"]:
+                continue
+            if time.time() - s.get("started_at", 0) < 10:
+                continue
+
+            p_stream = s.get("p_stream")
+            if p_stream and p_stream.poll() is not None:
+                stream_url = s.get("stream_url", "")
+                print(f"[LiveOrchestrator] [Live #{sid}] Transmissão encerrada pelo streamer (código {p_stream.returncode}).")
+                stop_live_session(sid, manual=False)
+
+                notif_msg = (
+                    f"🔴 *[AutoClip] Live Encerrada!*\n\n"
+                    f"A transmissão no *Slot #{sid}* ({stream_url}) foi finalizada pelo streamer.\n\n"
+                    f"👉 O *Slot #{sid}* já está liberado no dashboard para você adicionar outra live:\n"
+                    f"http://localhost:8501"
+                )
+                try:
+                    telegram_bot.send_telegram_notification(notif_msg)
+                except Exception as e:
+                    print(f"[LiveOrchestrator] Falha ao notificar encerramento no Telegram: {e}")
 
 def is_live_session_active(session_id: int = 1) -> bool:
     return _sessions.get(session_id, {}).get("active", False)
@@ -177,12 +213,14 @@ def start_live_session(stream_url: str, session_id: int = 1, on_clip_callback=No
         s["p_ffmpeg"] = p_ffmpeg
         s["detector"] = detector
         s["on_clip_callback"] = on_clip_callback
+        s["started_at"] = time.time()
+        _ensure_watchdog_started()
 
         return True, f"Monitoramento da Live #{session_id} iniciado com sucesso!"
     except Exception as e:
         return False, f"Erro ao iniciar Live #{session_id}: {e}"
 
-def stop_live_session(session_id: int = 1):
+def stop_live_session(session_id: int = 1, manual: bool = True):
     s = _sessions.get(session_id)
     if not s or not s["active"]:
         return
@@ -197,6 +235,7 @@ def stop_live_session(session_id: int = 1):
     s["p_stream"] = None
     s["p_ffmpeg"] = None
     s["detector"] = None
+    s["started_at"] = 0
 
 def stop_all_sessions():
     for sid in _sessions:

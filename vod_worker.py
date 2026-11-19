@@ -65,15 +65,19 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
             # Plano B: corte heurístico
             out_clip = CLIPS_DIR / f"{video_id}_part1.mp4"
             clip_info = clipper.generate_offline_action_clip(video_path, out_clip)
+            clip_info["path"] = str(out_clip)
+            clip_info["part"] = 1
+            if auto_send_telegram:
+                tg_ok = telegram_bot.send_clip_to_telegram(str(out_clip), clip_info["caption"])
+                clip_info["telegram_sent"] = tg_ok
             clips_data = [clip_info]
             rendered_clips = [clip_info]
-            if auto_send_telegram:
-                telegram_bot.send_clip_to_telegram(str(out_clip), clip_info["caption"])
         else:
             def _on_clip_done(clip_item):
                 if auto_send_telegram:
                     caption = config.format_caption(clip_item.get("title", ""), clip_item.get("caption", ""))
-                    telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
+                    tg_ok = telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
+                    clip_item["telegram_sent"] = tg_ok
 
             _current_job["step_label"] = f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16..."
             rendered_clips = clipper.render_clips_batch(
@@ -85,7 +89,14 @@ def _run_vod_pipeline(url: str, max_clips: int, auto_send_telegram: bool):
             )
 
         _current_job["clips"] = rendered_clips
-        _current_job["step_label"] = f"✅ {len(rendered_clips)} corte(s) concluído(s) e enviados ao Telegram!"
+        tg_count = sum(1 for c in rendered_clips if c.get("telegram_sent"))
+        if auto_send_telegram:
+            if tg_count == len(rendered_clips):
+                _current_job["step_label"] = f"✅ {len(rendered_clips)} corte(s) concluído(s) e entregues no Telegram!"
+            else:
+                _current_job["step_label"] = f"✅ {len(rendered_clips)} corte(s) concluído(s)! ({tg_count}/{len(rendered_clips)} entregues no Telegram)"
+        else:
+            _current_job["step_label"] = f"✅ {len(rendered_clips)} corte(s) concluído(s) com sucesso!"
         _current_job["done"] = True
         _current_job["completed_at"] = time.strftime("%H:%M:%S")
 

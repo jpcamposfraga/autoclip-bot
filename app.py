@@ -1,169 +1,161 @@
 import streamlit as st
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 import config
 from config import CLIPS_DIR
 import clipper
-import emulator
 import db
-import scheduler
-import metrics
 import telegram_bot
-import scanner
 import email_sender
 import live_orchestrator
 
 st.set_page_config(
-    page_title="AutoClip Factory",
+    page_title="AutoClip GTA 6 Factory",
     page_icon="🎬",
     layout="wide"
 )
-
-# Start background scheduler thread
-scheduler.start_scheduler()
 
 # Initialize Session State
 if "gemini_key" not in st.session_state:
     st.session_state["gemini_key"] = config.load_gemini_key()
 if "generated_clips" not in st.session_state:
     st.session_state["generated_clips"] = []
-if "live_clips" not in st.session_state:
-    st.session_state["live_clips"] = []
 
 # Sidebar
 with st.sidebar:
-    st.title("🎬 AutoClip Studio")
-    
-    gemini_key_input = st.text_input(
-        "Gemini API Key",
-        value=st.session_state["gemini_key"],
-        type="password",
-        help="Obtenha sua chave gratuita no Google AI Studio (será salva automaticamente)"
-    )
-    if gemini_key_input and gemini_key_input != st.session_state["gemini_key"]:
-        st.session_state["gemini_key"] = gemini_key_input
-        config.save_gemini_key(gemini_key_input)
-        st.toast("Chave de API salva com sucesso!", icon="💾")
-    elif gemini_key_input and not config.load_gemini_key():
-        config.save_gemini_key(gemini_key_input)
+    st.title("🎬 GTA 6 Clipper Factory")
+    st.caption("Sistema autônomo de cortes ao vivo para TikTok, Shorts e Reels.")
+
+    # 1. Gemini Keys Pool (Plano A + Plano B)
+    st.subheader("🧠 Chaves Gemini (Plano A + B)")
+    current_keys = config.load_gemini_keys_pool()
+    key_1 = current_keys[0] if len(current_keys) > 0 else ""
+    key_2 = current_keys[1] if len(current_keys) > 1 else ""
+
+    key_1_input = st.text_input("Chave Principal (Plano A)", value=key_1, type="password", help="Chave gratuita do Google AI Studio")
+    key_2_input = st.text_input("Chave Reserva (Plano B)", value=key_2, type="password", help="Chave secundária de outra conta Google para fallback automático")
+
+    new_keys = [k.strip() for k in [key_1_input, key_2_input] if k.strip()]
+    if new_keys != current_keys and (key_1_input or key_2_input):
+        config.save_gemini_keys_pool(new_keys)
+        st.session_state["gemini_key"] = new_keys[0] if new_keys else ""
+        st.toast("Chaves de IA salvas com sucesso!", icon="💾")
 
     st.divider()
-    st.subheader("📱 Emulador Ativo")
-    devices = emulator.get_connected_devices()
-    if devices:
-        st.success(f"{len(devices)} dispositivo(s) online:")
-        selected_device = st.selectbox("Dispositivo Conectado", devices)
+
+    # 2. Telegram Status
+    st.subheader("📱 Status Telegram")
+    tg_cfg = config.load_telegram_config()
+    chat_ids = telegram_bot.parse_chat_ids(tg_cfg.get("chat_id", ""))
+    if tg_cfg.get("bot_token") and chat_ids:
+        st.success(f"🟢 Conectado ({len(chat_ids)} destinatário(s))")
     else:
-        st.warning("Nenhum emulador ADB detectado.")
-        selected_device = None
+        st.warning("⚠️ Configure o Bot na aba Configurações")
 
-    with st.expander("🔌 Conexão Manual ADB"):
-        custom_addr = st.text_input("Endereço", value="127.0.0.1:5555", help="127.0.0.1:5555 para LDPlayer")
-        if st.button("Conectar Manualmente"):
-            res = emulator.connect_device(custom_addr)
-            st.info(f"Resposta: {res}")
-            st.rerun()
+    st.divider()
 
-    if st.button("🔄 Atualizar Emuladores", use_container_width=True):
-        st.rerun()
+    # 3. Auto-Refresh Toggle
+    st.subheader("🔄 Telemetria da Tela")
+    auto_refresh = st.toggle("Atualizar tela em tempo real (2s)", value=False, help="Atualiza espectadores e velocidades de chat automaticamente")
 
-# Main Application Tabs
-tab_live, tab_create, tab_queue, tab_metrics, tab_emulators, tab_settings = st.tabs([
-    "🔴 Live Clipper ao Vivo",
-    "🎬 Criador de Cortes (Links)",
-    "📅 Fila de Postagens",
-    "📊 Dashboard de Métricas",
-    "📱 Controle de Emuladores",
-    "⚙️ Configurações & Templates"
+# Main Application Tabs: Exactly 3 focused tabs
+tab_lives, tab_manual, tab_settings = st.tabs([
+    "🔴 Multi-Live GTA 6 (3 Slots)",
+    "🎬 Clipar Link/VOD (Manual)",
+    "⚙️ Configurações & Telegram"
 ])
 
-# TAB 0: Live Clipper ao Vivo
-with tab_live:
-    st.subheader("🔴 Monitoramento de Live em Tempo Real (GTA 6 / Twitch / YouTube)")
-    st.caption("A IA assiste à live mantendo um buffer circular de ~100s. Ao detectar um pico súbito de hype ou risadas no chat (MPS > 2.5x da média), extrai os últimos 60 segundos, aplica legendas animadas em 9:16 e entrega imediatamente no seu E-mail ou Telegram!")
+# TAB 1: Multi-Live GTA 6
+with tab_lives:
+    st.subheader("📡 Monitoramento Multi-Live Simultâneo (Até 3 Transmissões)")
+    st.caption(
+        "A IA monitora até 3 lives em paralelo mantendo buffers circulares de 150 segundos. "
+        "Quando o chat explode proporcionalmente ao número de espectadores, corta automaticamente de 61s a 75s "
+        "(qualificado para monetização do TikTok) e dispara instantaneamente para o seu Telegram e do seu amigo!"
+    )
 
-    live_status = live_orchestrator.get_live_session_status()
-    is_active = live_status["active"]
+    all_statuses = live_orchestrator.get_all_sessions_status()
+    any_active = any(s["active"] for s in all_statuses)
 
-    c_left, c_right = st.columns([3, 2])
+    col1, col2, col3 = st.columns(3)
+    cols = [col1, col2, col3]
 
-    with c_left:
-        with st.container(border=True):
-            st.markdown("### 🎮 Controle da Transmissão")
-            live_url_input = st.text_input(
-                "URL da Live (YouTube Live ou Twitch)",
-                placeholder="https://www.twitch.tv/nome_do_streamer ou https://www.youtube.com/watch?v=...",
-                value=live_status["stream_url"] if is_active else "",
-                disabled=is_active
-            )
+    for idx, col in enumerate(cols):
+        session_id = idx + 1
+        s_data = all_statuses[idx]
+        is_active = s_data["active"]
 
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                if not is_active:
-                    if st.button("▶️ Iniciar Monitoramento de Live", type="primary", use_container_width=True):
-                        if not live_url_input:
-                            st.error("Insira a URL de uma transmissão ao vivo válida.")
-                        elif not st.session_state["gemini_key"]:
-                            st.error("Configure sua Gemini API Key na barra lateral antes de iniciar.")
-                        else:
-                            with st.spinner("Conectando ao stream e abrindo buffer circular..."):
-                                ok, msg = live_orchestrator.start_live_session(
-                                    live_url_input,
-                                    on_clip_callback=lambda clip: st.session_state["live_clips"].append(clip)
-                                )
-                                if ok:
-                                    st.success(msg)
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error(msg)
-                else:
-                    if st.button("⏹️ Parar Monitoramento", type="secondary", use_container_width=True):
-                        live_orchestrator.stop_live_session()
-                        st.info("Monitoramento de live interrompido.")
-                        time.sleep(1)
-                        st.rerun()
+        with col:
+            with st.container(border=True):
+                st.markdown(f"### 🎮 Live Slot #{session_id}")
+                
+                stream_url = st.text_input(
+                    f"URL da Live #{session_id}",
+                    placeholder="https://www.youtube.com/watch?v=... ou Twitch",
+                    value=s_data["stream_url"] if is_active else "",
+                    disabled=is_active,
+                    key=f"url_slot_{session_id}"
+                )
 
-            with btn_col2:
-                if st.button("🔄 Atualizar Status da Live", use_container_width=True):
-                    st.rerun()
+                # Status Metrics
+                m_c1, m_c2 = st.columns(2)
+                with m_c1:
+                    st.metric("Status", "🟢 Ao Vivo" if is_active else "⚪ Inativo")
+                    st.metric("Espectadores", f"👥 {s_data['viewers']:,}" if s_data['viewers'] > 0 else "👥 --")
+                with m_c2:
+                    st.metric("Velocidade Chat", f"💬 {s_data['current_mps']:.1f} m/s")
+                    st.metric("Gatilho Exigido", f"🎯 > {s_data['required_mps']:.1f} m/s" if is_active else "🎯 --")
 
-            if is_active:
-                st.write("")
-                if st.button("⚡ Clipar Últimos 60s Agora (Manual)", type="primary", use_container_width=True):
-                    ok, msg = live_orchestrator.trigger_manual_live_clip()
-                    if ok:
-                        st.toast(msg, icon="🎬")
-                        st.info("Processando o clipe dos últimos 60 segundos do buffer... Chegará no Telegram em instantes!")
+                if s_data.get("error_message"):
+                    st.warning(f"⚠️ {s_data['error_message']}")
+
+                # Control Buttons
+                b_col1, b_col2 = st.columns(2)
+                with b_col1:
+                    if not is_active:
+                        if st.button(f"▶️ Iniciar #{session_id}", key=f"btn_start_{session_id}", type="primary", use_container_width=True):
+                            if not stream_url:
+                                st.error("Insira uma URL de live válida.")
+                            elif not config.load_gemini_keys_pool():
+                                st.error("Configure ao menos uma Gemini API Key na barra lateral.")
+                            else:
+                                with st.spinner(f"Iniciando buffer e chat da Live #{session_id}..."):
+                                    ok, msg = live_orchestrator.start_live_session(stream_url, session_id=session_id)
+                                    if ok:
+                                        st.success(msg)
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
                     else:
-                        st.error(msg)
+                        if st.button(f"⏹️ Parar #{session_id}", key=f"btn_stop_{session_id}", type="secondary", use_container_width=True):
+                            live_orchestrator.stop_live_session(session_id)
+                            st.info(f"Live #{session_id} parada.")
+                            time.sleep(1)
+                            st.rerun()
 
-    with c_right:
-        with st.container(border=True):
-            st.markdown("### 📊 Telemetria ao Vivo")
-            m_col1, m_col2 = st.columns(2)
-            with m_col1:
-                status_text = "🟢 Monitorando" if is_active else "⚪ Inativo"
-                st.metric("Status da Sessão", status_text)
-                st.metric("Cortes Gerados", live_status["clips_count"])
-            with m_col2:
-                st.metric("Velocidade do Chat", f"{live_status['current_mps']:.1f} msg/s")
-                active_pref = config.load_delivery_channel().capitalize()
-                st.metric("Canal de Entrega", active_pref)
+                with b_col2:
+                    if is_active:
+                        if st.button(f"⚡ Clipar 65s", key=f"btn_manual_{session_id}", help="Corta os últimos 65s do buffer agora mesmo e envia pro Telegram", use_container_width=True):
+                            ok, msg = live_orchestrator.trigger_manual_live_clip(session_id)
+                            if ok:
+                                st.toast(f"Corte manual disparado para Live #{session_id}!", icon="🎬")
+                                st.info("Processando os últimos 65s da live... Chegará no Telegram em breve!")
+                            else:
+                                st.error(msg)
+                    else:
+                        st.caption("Disponível quando ativo")
 
-            if live_status.get("error_message"):
-                st.warning(f"⚠️ {live_status['error_message']}")
-
-            if is_active and live_status["last_clip_title"]:
-                st.caption(f"Último clipe: **{live_status['last_clip_title']}**")
+                if is_active and s_data["last_clip_title"]:
+                    st.caption(f"Último corte: **{s_data['last_clip_title']}** (Total: {s_data['clips_count']})")
 
     st.divider()
-    st.subheader("🎬 Galeria de Cortes Gerados da Live")
 
-    # Coleta cortes gerados na pasta de mídia
+    # Galeria de Cortes Gerados
+    st.subheader("🎬 Galeria de Cortes Recentes de GTA 6")
     live_clips_on_disk = sorted(
-        list(config.CLIPS_DIR.glob("live_gta6_*_vertical.mp4")),
+        list(CLIPS_DIR.glob("live_gta6_*_vertical.mp4")),
         key=lambda f: f.stat().st_mtime,
         reverse=True
     )
@@ -175,91 +167,63 @@ with tab_live:
                 with col_vid:
                     st.video(str(clip_file))
                 with col_info:
-                    clip_name = clip_file.stem.replace("_vertical", "").replace("live_gta6_", "Corte ")
-                    st.markdown(f"**🎬 {clip_name}**")
-                    clip_caption = config.format_caption(clip_name, "#GTA6 #GTA #Viral #Gaming")
-                    st.text_area("Texto de postagem gerado:", value=clip_caption, height=80, key=f"live_caption_{idx}")
+                    c_title = clip_file.stem.replace("_vertical", "").replace("live_gta6_", "Corte ")
+                    st.markdown(f"**🎬 {c_title}**")
+                    c_caption = config.format_caption(c_title, "#GTA6 #GTA #Viral #Gaming #Shorts")
+                    st.text_area("Legenda gerada:", value=c_caption, height=75, key=f"feed_cap_{idx}")
 
                     ac1, ac2 = st.columns(2)
                     with ac1:
-                        if st.button(f"📧 Reenviar por E-mail", key=f"live_email_{idx}", use_container_width=True):
-                            with st.spinner("Enviando vídeo por e-mail..."):
-                                ok, msg = email_sender.send_clip_by_email(str(clip_file), clip_name, clip_caption)
+                        if st.button("💬 Reenviar no Telegram", key=f"feed_tg_{idx}", type="primary", use_container_width=True):
+                            with st.spinner("Enviando vídeo para o Telegram..."):
+                                ok = telegram_bot.send_clip_to_telegram(str(clip_file), c_caption)
+                                if ok:
+                                    st.success("Vídeo entregue no Telegram de todos os destinatários!")
+                                else:
+                                    st.error("Falha ao entregar no Telegram.")
+                    with ac2:
+                        if st.button("📧 Reenviar por E-mail", key=f"feed_em_{idx}", use_container_width=True):
+                            with st.spinner("Enviando e-mail..."):
+                                ok, msg = email_sender.send_clip_by_email(str(clip_file), c_title, c_caption)
                                 if ok:
                                     st.success(msg)
                                 else:
                                     st.error(msg)
-                    with ac2:
-                        if st.button(f"💬 Reenviar no Telegram", key=f"live_tg_{idx}", use_container_width=True):
-                            with st.spinner("Enviando vídeo para o Telegram..."):
-                                ok = telegram_bot.send_clip_to_telegram(str(clip_file), clip_caption)
-                                if ok:
-                                    st.success("Enviado com sucesso para o Telegram!")
-                                else:
-                                    st.error("Falha ao enviar para o Telegram.")
     else:
-        st.info("Nenhum clipe de live gerado ainda. Inicie o monitoramento acima para capturar momentos virais automaticamente!")
+        st.info("Nenhum corte de live gerado ainda. Inicie o monitoramento em um dos slots acima!")
 
-# TAB 1: Criador de Cortes (Links)
-with tab_create:
-    with st.container(border=True):
-        st.subheader("🤖 Piloto Automático (Auto-Sourcing + Telegram)")
-        st.caption("Varre canais de filmes do YouTube, identifica ganchos virais, renderiza em 9:16 com legendas e entrega pronto no seu Telegram nos horários de pico (12h, 18h e 21h).")
-        auto_col1, auto_col2 = st.columns([2, 1])
-        with auto_col1:
-            st.info("ℹ️ Os envios ocorrem automaticamente às **12:00, 18:00 e 21:00** se a aplicação estiver aberta.")
-        with auto_col2:
-            auto_btn = st.button("🚀 Buscar e Enviar Agora no Telegram", type="primary", use_container_width=True)
+# TAB 2: Clipar Link/VOD Manual
+with tab_manual:
+    st.subheader("🎬 Criar Cortes Verticais a partir de Link do YouTube")
+    st.caption("Cole o link de uma cena ou gameplay para a IA identificar os melhores momentos, renderizar em 9:16 e enviar imediatamente no Telegram.")
 
-        if auto_btn:
-            status_box = st.status("Iniciando fluxo autônomo completo...", expanded=True)
-            res = scheduler.run_autonomous_pipeline(status_callback=lambda msg: status_box.update(label=msg))
-            if res.get("success"):
-                status_box.update(label="✅ Vídeo gerado e entregue com sucesso no seu Telegram!", state="complete")
-                st.success(f"Vídeo enviado: **{res.get('title')}**")
-                if res.get("path"):
-                    st.video(res.get("path"))
-            else:
-                status_box.update(label=f"❌ Falha: {res.get('error')}", state="error")
-                st.error(res.get("error"))
-
-    st.divider()
-    st.subheader("Ou Gere Manualmente a partir de um Link")
-    yt_url = st.text_input(
-        "URL do Clipe no YouTube",
-        placeholder="https://www.youtube.com/watch?v=..."
-    )
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        max_clips = st.slider("Máximo de cortes a extrair", min_value=1, max_value=5, value=3)
-    with col2:
+    yt_url = st.text_input("URL do Vídeo no YouTube", placeholder="https://www.youtube.com/watch?v=...")
+    m_col1, m_col2 = st.columns([1, 1])
+    with m_col1:
+        max_clips = st.slider("Quantidade de cortes a extrair", min_value=1, max_value=5, value=2)
+    with m_col2:
         st.write("")
-        auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada clipe for gerado", value=True)
+        auto_send_telegram = st.checkbox("💬 Enviar no Telegram assim que cada corte for gerado", value=True)
         start_btn = st.button("⚡ Processar e Gerar Cortes 9:16", type="primary", use_container_width=True)
 
     if start_btn:
         if not yt_url:
-            st.error("Por favor, insira uma URL válida do YouTube.")
-        elif not st.session_state["gemini_key"]:
-            st.error("Insira sua Gemini API Key na barra lateral para prosseguir.")
+            st.error("Insira uma URL válida do YouTube.")
+        elif not config.load_gemini_keys_pool():
+            st.error("Configure sua Gemini API Key na barra lateral.")
         else:
             status_box = st.status("Iniciando pipeline de corte...", expanded=True)
             try:
-                # 1. Download
-                status_box.update(label="1/4 Baixando clipe em alta definição...")
+                status_box.update(label="1/4 Baixando vídeo...")
                 video_id = f"clip_{int(time.time())}"
                 video_path = clipper.download_youtube(yt_url, video_id=video_id)
 
-                # 2. Extração de Áudio
                 status_box.update(label="2/4 Extraindo áudio para análise...")
                 audio_path = clipper.extract_audio(video_path)
 
-                # 3. Análise com Gemini (Multi-clip)
-                status_box.update(label="3/4 IA identificando ganchos virais e gerando legendas...")
+                status_box.update(label="3/4 IA identificando ganchos virais e legendas...")
                 clips_data = clipper.analyze_scene_with_gemini(
                     audio_path,
-                    st.session_state["gemini_key"],
                     max_clips=max_clips,
                     status_callback=lambda msg: status_box.update(label=f"3/4 {msg}")
                 )
@@ -267,15 +231,13 @@ with tab_create:
                 if not clips_data:
                     raise RuntimeError("Nenhum segmento viral válido foi identificado no áudio fornecido.")
 
-                # Callback para envio imediato à medida que cada vídeo for renderizado
                 def _on_clip_done(clip_item):
                     if auto_send_telegram:
                         caption = config.format_caption(clip_item.get("title", ""), clip_item.get("caption", ""))
                         telegram_bot.send_clip_to_telegram(clip_item["path"], caption)
                         st.toast(f"Corte #{clip_item.get('part')} entregue no Telegram!", icon="🚀")
 
-                # 4. Renderização Vertical em Lote
-                status_box.update(label=f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16 com legendas...")
+                status_box.update(label=f"4/4 Renderizando {len(clips_data)} corte(s) em 9:16...")
                 rendered_clips = clipper.render_clips_batch(
                     video_path=video_path,
                     clips_data=clips_data,
@@ -290,258 +252,26 @@ with tab_create:
                 status_box.update(label=f"❌ Erro durante o processamento: {e}", state="error")
                 st.exception(e)
 
-    # Exibição dos cortes gerados
-    if st.session_state["generated_clips"]:
-        st.divider()
-        st.subheader(f"🎬 Cortes Gerados ({len(st.session_state['generated_clips'])})")
-
-        for idx, clip in enumerate(st.session_state["generated_clips"]):
-            dur = round(clip.get("end_seconds", 0) - clip.get("start_seconds", 0), 1)
-            with st.expander(f"Corte #{clip.get('part', idx+1)}: {clip.get('title', 'Sem título')} ({dur}s)", expanded=True):
-                p_col1, p_col2 = st.columns([1, 2])
-                with p_col1:
-                    st.video(clip["path"])
-
-                with p_col2:
-                    c_title = st.text_input("Título:", value=clip.get("title", ""), key=f"title_{idx}")
-                    c_caption = st.text_area("Legenda sugerida:", value=clip.get("caption", ""), height=80, key=f"caption_{idx}")
-
-                    act_col1, act_col2 = st.columns(2)
-                    with act_col1:
-                        target_platform = st.selectbox(
-                            "Plataforma Alvo",
-                            ["instagram", "tiktok", "youtube_shorts", "instagram_lite", "tiktok_lite"],
-                            format_func=lambda x: {
-                                "instagram": "Instagram (Oficial)",
-                                "tiktok": "TikTok (Oficial)",
-                                "youtube_shorts": "YouTube Shorts",
-                                "instagram_lite": "Instagram Lite (Legado)",
-                                "tiktok_lite": "TikTok Lite (Legado)"
-                            }[x],
-                            key=f"plat_{idx}"
-                        )
-                    with act_col2:
-                        schedule_choice = st.selectbox(
-                            "Quando Postar",
-                            ["Agora", "Daqui a 1 hora", "Daqui a 2 horas", "Daqui a 3 horas"],
-                            key=f"when_{idx}"
-                        )
-
-                    btn_c1, btn_c2 = st.columns(2)
-                    with btn_c1:
-                        if st.button(f"📧 Enviar por E-mail", key=f"email_{idx}", type="primary", use_container_width=True):
-                            with st.spinner("Enviando vídeo por e-mail..."):
-                                formatted_text = config.format_caption(c_title, c_caption)
-                                ok, msg = email_sender.send_clip_by_email(clip["path"], c_title, formatted_text)
-                                if ok:
-                                    st.success(msg)
-                                else:
-                                    st.error(msg)
-
-                        if st.button(f"💬 Enviar no Telegram", key=f"tg_{idx}", use_container_width=True):
-                            with st.spinner("Enviando vídeo para o Telegram..."):
-                                formatted_text = config.format_caption(c_title, c_caption)
-                                ok = telegram_bot.send_clip_to_telegram(clip["path"], formatted_text)
-                                if ok:
-                                    st.success("Vídeo entregue no seu Telegram com sucesso!")
-                                else:
-                                    st.error("Falha ao enviar. Verifique o Bot Token e Chat ID na aba Configurações.")
-
-                        if selected_device:
-                            if st.button(f"📲 Injetar na Galeria", key=f"push_{idx}", use_container_width=True):
-                                if emulator.push_video_to_gallery(selected_device, Path(clip["path"])):
-                                    st.success(f"Vídeo enviado para a galeria do {selected_device}!")
-                                else:
-                                    st.error("Falha ao transferir.")
-                    with btn_c2:
-                        if selected_device:
-                            if st.button(f"📅 Agendar Postagem", key=f"sched_{idx}", type="primary", use_container_width=True):
-                                hours_map = {"Agora": 0, "Daqui a 1 hora": 1, "Daqui a 2 horas": 2, "Daqui a 3 horas": 3}
-                                sched_time = (datetime.now() + timedelta(hours=hours_map[schedule_choice])).isoformat()
-                                db.enqueue_post(
-                                    clip_path=clip["path"],
-                                    platform=target_platform,
-                                    device_serial=selected_device,
-                                    title=c_title,
-                                    caption=c_caption,
-                                    scheduled_at=sched_time
-                                )
-                                st.success(f"Corte #{clip.get('part', idx+1)} adicionado à Fila de Postagens!")
-                        else:
-                            st.info("Conecte um emulador para agendar.")
-
-# TAB 2: Fila de Postagens
-with tab_queue:
-    st.header("📅 Fila de Postagens Automáticas")
-    
-    q_col1, q_col2 = st.columns([3, 1])
-    with q_col2:
-        if st.button("⚡ Processar Fila Agora", type="primary", use_container_width=True):
-            with st.spinner("Verificando e processando postagens pendentes..."):
-                msg = scheduler.process_due_posts_once(force=True)
-                st.info(msg)
-            st.rerun()
-
-    posts = db.get_all_posts(limit=25)
-    if posts:
-        for p in posts:
-            status_colors = {
-                "pending": "🟡 Pendente",
-                "processing": "🔵 Postando no Emulador...",
-                "completed": "🟢 Publicado",
-                "failed": "🔴 Falha"
-            }
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([2, 1, 1])
-                with c1:
-                    st.markdown(f"**{p['title'] or 'Sem título'}**")
-                    st.caption(f"📁 `{Path(p['clip_path']).name}` | 📱 {p['platform']} ({p['device_serial']})")
-                    if p.get("error_msg"):
-                        st.error(f"Erro: {p['error_msg']}")
-                with c2:
-                    st.write(status_colors.get(p["status"], p["status"]))
-                    st.caption(f"Agendado: {p['scheduled_at'][:16]}")
-                with c3:
-                    if p["status"] == "completed":
-                        current_url = p.get("public_url") or ""
-                        new_url = st.text_input("URL Pública do Post:", value=current_url, key=f"url_{p['id']}")
-                        if new_url and new_url != current_url:
-                            db.update_post_status(p["id"], "completed", public_url=new_url)
-                            metrics.refresh_metrics_for_post(p["id"], new_url)
-                            st.success("URL salva!")
-    else:
-        st.info("Nenhuma postagem agendada ou registrada na fila ainda.")
-
-# TAB 3: Dashboard de Métricas
-with tab_metrics:
-    st.header("📊 Métricas de Performance")
-    summary = db.get_metrics_summary()
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Vídeos Postados", summary.get("total_posts", 0))
-    m2.metric("Total de Visualizações", f"{summary.get('total_views', 0):,}")
-    m3.metric("Total de Curtidas", f"{summary.get('total_likes', 0):,}")
-    m4.metric("Total de Comentários", f"{summary.get('total_comments', 0):,}")
-
-    st.divider()
-    st.subheader("Histórico Detalhado dos Posts")
-    
-    completed_posts = [p for p in db.get_all_posts() if p["status"] == "completed"]
-    if completed_posts:
-        if st.button("🔄 Atualizar Métricas Públicas"):
-            with st.spinner("Atualizando métricas via web..."):
-                for p in completed_posts:
-                    if p.get("public_url"):
-                        metrics.refresh_metrics_for_post(p["id"], p["public_url"])
-            st.rerun()
-
-        for p in completed_posts:
-            with st.container(border=True):
-                st.markdown(f"**{p['title']}** ({p['platform']})")
-                if p.get("public_url"):
-                    st.caption(f"🔗 [Ver Publicação]({p['public_url']})")
-                else:
-                    st.caption("Insira a URL pública na aba 'Fila de Postagens' para monitorar visualizações automaticamente.")
-    else:
-        st.caption("Nenhum post concluído registrado para exibir métricas.")
-
-# TAB 4: Controle de Emuladores
-with tab_emulators:
-    st.header("📱 Dispositivos e Automação Móvel")
-    if devices:
-        st.write("Dispositivos detectados via ADB:")
-        for dev in devices:
-            st.code(dev)
-
-        st.subheader("Ações Rápidas de Teste")
-        app_choice = st.selectbox(
-            "Aplicativo para Abrir",
-            [
-                "com.instagram.android (Instagram Oficial)",
-                "com.zhiliaoapp.musically (TikTok Oficial)",
-                "com.google.android.youtube (YouTube Shorts)",
-                "com.instagram.lite (Instagram Lite)",
-                "com.zhiliaoapp.musically.go (TikTok Lite)"
-            ]
-        )
-        pkg = app_choice.split(" ")[0]
-
-        if st.button("🚀 Abrir Aplicativo no Emulador"):
-            if selected_device:
-                emulator.launch_app(selected_device, pkg)
-                st.success(f"Comando de abertura enviado para {selected_device}!")
-    else:
-        st.info("Nenhum emulador ativo. Abra o LDPlayer 9 no Windows.")
-
-# TAB 5: Configurações & Templates
+# TAB 3: Configurações & Telegram
 with tab_settings:
-    st.header("⚙️ Configurações & Integrações")
+    st.header("⚙️ Configurações & Canais de Entrega")
 
-    # 0. Preferência de Entrega
-    st.subheader("📬 Canal Preferencial de Entrega de Vídeos")
-    current_delivery = config.load_delivery_channel()
-    delivery_options = ["email", "telegram", "both"]
-    default_delivery_idx = delivery_options.index(current_delivery) if current_delivery in delivery_options else 0
-
-    delivery_pref = st.radio(
-        "Como você deseja receber os vídeos prontos no seu celular?",
-        options=delivery_options,
-        index=default_delivery_idx,
-        format_func=lambda x: {
-            "email": "📧 Apenas E-mail (Recomendado - 100% estável e salva direto no celular)",
-            "telegram": "💬 Apenas Telegram",
-            "both": "🚀 Ambos (E-mail e Telegram simultâneos)"
-        }[x]
-    )
-
-    st.divider()
-
-    # 1. Entrega por E-mail
-    st.subheader("📧 Entrega Automática via E-mail")
-    st.caption("Receba os vídeos em 9:16 prontos como anexo MP4 na sua caixa de entrada.")
-    
-    email_cfg = config.load_email_config()
-    em_col1, em_col2 = st.columns(2)
-    with em_col1:
-        sender_email_input = st.text_input("Seu E-mail Remetente (Gmail)", value=email_cfg["sender_email"], help="Ex: seuemail@gmail.com")
-        sender_pwd_input = st.text_input("Senha de App do Gmail (16 letras)", value=email_cfg["sender_password"], type="password", help="Gere no Google em: Gerenciar Conta > Segurança > Senhas de app")
-    with em_col2:
-        recipient_email_input = st.text_input("E-mail de Destino (Receber no celular)", value=email_cfg["recipient_email"], help="Geralmente o mesmo e-mail que você acessa no smartphone")
-        smtp_server_input = st.text_input("Servidor SMTP", value=email_cfg.get("smtp_server", "smtp.gmail.com"))
-
-    if st.button("🔔 Testar Conexão de E-mail"):
-        if not sender_email_input or not sender_pwd_input or not recipient_email_input:
-            st.error("Preencha remetente, senha de app e destinatário antes de testar.")
-        else:
-            with st.spinner("Enviando e-mail de teste..."):
-                ok, msg = email_sender.test_email_connection(sender_email_input, sender_pwd_input, recipient_email_input)
-                if ok:
-                    config.save_email_config(sender_email_input, sender_pwd_input, recipient_email_input, smtp_server_input)
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
-    st.divider()
-
-    # 2. Telegram
-    st.subheader("📱 Entrega Automática via Telegram (Multi-Usuário)")
+    # 1. Telegram Multi-Destinatários
+    st.subheader("📱 Entrega via Telegram (Você + Amigo)")
     st.caption("Receba os cortes renderizados em tempo real no seu smartphone e de mais pessoas.")
 
-    with st.expander("💡 Como configurar o envio para 2 ou mais pessoas (Passo a Passo)", expanded=False):
+    with st.expander("💡 Como configurar para 2 ou mais celulares (Passo a Passo)", expanded=False):
         st.markdown("""
 1. **Criar o Bot (se ainda não tiver):**
-   - No Telegram, procure por `@BotFather` e envie `/newbot`.
-   - Escolha o nome e o username do bot (deve terminar com `bot`, ex: `MeuClipperBot`).
-   - Copie o **Token HTTP API** e cole no campo abaixo.
-2. **PASSO CRÍTICO: Dar /start no Bot:**
+   - No Telegram, busque por `@BotFather` e envie `/newbot`.
+   - Copie o **Token HTTP API** e cole abaixo.
+2. **PASSO CRÍTICO: Clicar em /start no Bot:**
    - **Você** deve abrir a conversa com seu bot no Telegram e clicar em **/start**.
-   - **A outra pessoa** também DEVE abrir a conversa com o mesmo bot e clicar em **/start**.  
-   *(Se alguém esquecer de dar `/start`, o Telegram bloqueia o envio dessa pessoa por segurança).*
+   - **A outra pessoa** também DEVE abrir a conversa com o mesmo bot e clicar em **/start**.
 3. **Descobrir o Chat ID de cada um:**
-   - Você e a outra pessoa devem enviar qualquer mensagem para o bot `@userinfobot` no Telegram.
-   - Ele responderá com o número de `Id` (ex: `123456789`).
+   - Cada um deve mandar um "Oi" para o bot `@userinfobot` no Telegram para ver seu número de `Id`.
 4. **Inserir os IDs:**
-   - Digite os dois IDs separados por vírgula no campo abaixo (ex: `123456789, 987654321`).
+   - Digite os dois números separados por vírgula no campo abaixo (ex: `123456789, 987654321`).
         """)
 
     tg_cfg = config.load_telegram_config()
@@ -552,7 +282,7 @@ with tab_settings:
         chat_id_input = st.text_input(
             "Chat IDs (separados por vírgula)",
             value=tg_cfg["chat_id"],
-            help="Insira os números de ID de todos os destinatários separados por vírgula (ex: 123456789, 987654321)"
+            help="Ex: 123456789, 987654321 (insira o seu ID e o da outra pessoa)"
         )
 
     if st.button("🔔 Testar Conexão com Telegram"):
@@ -569,47 +299,53 @@ with tab_settings:
 
     st.divider()
 
-    # 3. Horários de Pico
-    st.subheader("⏰ Horários Automáticos de Pico")
-    st.caption("Horários do dia em que a IA busca um vídeo novo, gera os cortes e envia no seu celular.")
+    # 2. Estratégia de Duração (Monetização x Tração)
+    st.subheader("💰 Estratégia de Duração dos Cortes")
+    st.caption("O TikTok Creator Rewards exige vídeos com mais de 1 minuto (>=61s) para monetizar.")
     
-    current_peak_hours = config.load_peak_hours()
-    peak_hours_str = st.text_input("Horários (formato HH:MM separados por vírgula):", value=", ".join(current_peak_hours))
-
-    # 4. Canais Monitorados
-    st.subheader("📺 Canais Monitorados do YouTube")
-    st.caption("Lista de canais com conteúdo de alta qualidade monitorados pelo AutoClip.")
+    current_dur_mode = config.load_duration_mode()
+    dur_options = ["hybrid", "monetization", "traction"]
+    dur_index = dur_options.index(current_dur_mode) if current_dur_mode in dur_options else 0
     
-    current_channels = config.load_monitored_channels()
-    channels_text = st.text_area("URLs dos canais (uma por linha):", value="\n".join(current_channels), height=100)
+    dur_choice = st.radio(
+        "Selecione o modo de duração dos clipes gerados:",
+        options=dur_options,
+        index=dur_index,
+        format_func=lambda x: {
+            "hybrid": "🎯 Híbrido Inteligente (70% Monetização >=61s / 30% Tração Rápida 35s) [Recomendado]",
+            "monetization": "💰 Apenas Monetização (Todos os vídeos com 61s a 75s para monetizar no TikTok)",
+            "traction": "⚡ Apenas Tração Rápida (Todos os vídeos com 30s a 45s para viralizar rápido)"
+        }[x]
+    )
 
     st.divider()
 
-    # 5. Template de Copywriting
+    # 3. E-mail Opcional
+    st.subheader("📧 Entrega Secundária via E-mail (Opcional)")
+    email_cfg = config.load_email_config()
+    em_c1, em_c2 = st.columns(2)
+    with em_c1:
+        sender_email_input = st.text_input("E-mail Remetente", value=email_cfg.get("sender_email", ""))
+        sender_pwd_input = st.text_input("Senha de App (16 letras)", value=email_cfg.get("sender_password", ""), type="password")
+    with em_c2:
+        recipient_email_input = st.text_input("E-mail de Destino", value=email_cfg.get("recipient_email", ""))
+        smtp_server_input = st.text_input("Servidor SMTP", value=email_cfg.get("smtp_server", "smtp.gmail.com"))
+
+    st.divider()
+
+    # 4. Template de Legenda
     st.subheader("Template de Título e Legenda")
-    st.caption("Variáveis disponíveis: `{title}` (Título do corte) e `{caption}` (Legenda sugerida pela IA).")
-    
     current_template = config.load_caption_template()
-    new_template = st.text_area("Estrutura do Texto:", value=current_template, height=120)
+    new_template = st.text_area("Estrutura do Texto:", value=current_template, height=100)
 
     if st.button("💾 Salvar Todas as Configurações", type="primary", use_container_width=True):
-        # Save Delivery Pref
-        config.save_delivery_channel(delivery_pref)
-        # Save Email
-        config.save_email_config(sender_email_input, sender_pwd_input, recipient_email_input, smtp_server_input)
-        # Save Telegram
         config.save_telegram_config(bot_token_input, chat_id_input)
-        # Save Peak Hours
-        cleaned_hours = [h.strip() for h in peak_hours_str.split(",") if ":" in h.strip()]
-        config.save_peak_hours(cleaned_hours)
-        # Save Channels
-        cleaned_channels = [c.strip() for c in channels_text.splitlines() if c.strip()]
-        config.save_monitored_channels(cleaned_channels)
-        # Save Template
+        config.save_duration_mode(dur_choice)
+        config.save_email_config(sender_email_input, sender_pwd_input, recipient_email_input, smtp_server_input)
         config.save_caption_template(new_template)
         st.success("Configurações salvas e aplicadas com sucesso!")
 
-    st.divider()
-    st.subheader("Pré-visualização do Template Formatado")
-    sample_preview = config.format_caption("When the hero reveals his true identity...", "Unbelievable plot twist! #movies #cinema")
-    st.code(sample_preview, language="text")
+# Auto-Refresh Loop
+if auto_refresh and any_active:
+    time.sleep(2)
+    st.rerun()

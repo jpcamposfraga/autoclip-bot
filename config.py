@@ -41,12 +41,43 @@ def _save_config_data(data: dict):
     CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 def load_gemini_key() -> str:
+    keys = load_gemini_keys_pool()
+    return keys[0] if keys else (os.getenv("GEMINI_API_KEY", "").strip())
+
+def load_gemini_keys_pool() -> list[str]:
     data = _load_config_data()
-    return data.get("gemini_api_key", "").strip() or os.getenv("GEMINI_API_KEY", "")
+    raw = data.get("gemini_keys_pool", [])
+    if isinstance(raw, list):
+        keys = [k.strip() for k in raw if k.strip()]
+    elif isinstance(raw, str):
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+    else:
+        keys = []
+    single_key = data.get("gemini_api_key", "").strip()
+    if single_key and single_key not in keys:
+        keys.insert(0, single_key)
+    env_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if env_key and env_key not in keys:
+        keys.append(env_key)
+    return keys
 
 def save_gemini_key(key: str):
+    save_gemini_keys_pool([key])
+
+def save_gemini_keys_pool(keys: list[str]):
     data = _load_config_data()
-    data["gemini_api_key"] = key.strip()
+    cleaned = [k.strip() for k in keys if k.strip()]
+    data["gemini_keys_pool"] = cleaned
+    data["gemini_api_key"] = cleaned[0] if cleaned else ""
+    _save_config_data(data)
+
+def load_duration_mode() -> str:
+    data = _load_config_data()
+    return data.get("duration_mode", "hybrid") # "monetization", "traction", "hybrid"
+
+def save_duration_mode(mode: str):
+    data = _load_config_data()
+    data["duration_mode"] = mode
     _save_config_data(data)
 
 def load_caption_template() -> str:

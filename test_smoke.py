@@ -111,11 +111,20 @@ def test_live_clipper_and_email():
     hype_score = detector._calculate_score("CARALHO WTF KKKKK QUE INSANO")
     assert hype_score > normal_score
 
-    # 4. Live orchestrator status
-    status = live_orchestrator.get_live_session_status()
-    assert not status["active"]
-    assert status["clips_count"] == 0
-    print("[OK] Live circular buffer, chat spike scoring and email sender validated")
+    # 4. Multi-live orchestrator status & isolated buffers
+    all_sessions = live_orchestrator.get_all_sessions_status()
+    assert len(all_sessions) == 3
+    assert not all_sessions[0]["active"]
+    assert all_sessions[0]["session_id"] == 1
+    s2_dir = live_stream.get_session_buffer_dir(2)
+    assert s2_dir.exists() and s2_dir.name == "live_2"
+
+    # 5. Duration mode & Multi-key pool
+    config.save_duration_mode("monetization")
+    assert config.load_duration_mode() == "monetization"
+    config.save_gemini_keys_pool(["key_a", "key_b"])
+    assert config.load_gemini_keys_pool() == ["key_a", "key_b"]
+    print("[OK] Multi-live circular buffers, chat spike, duration modes and Gemini key pool validated")
 
 if __name__ == "__main__":
     import tempfile

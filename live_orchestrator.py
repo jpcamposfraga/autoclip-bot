@@ -1,161 +1,203 @@
 import time
 import threading
 from pathlib import Path
-from config import CLIPS_DIR, load_gemini_key, format_caption, load_delivery_channel
+from config import CLIPS_DIR, format_caption, load_delivery_channel
+import config
 import live_stream
 import chat_spike
 import clipper
 import email_sender
 import telegram_bot
 
-_current_session = {
-    "active": False,
-    "stream_url": "",
-    "p_stream": None,
-    "p_ffmpeg": None,
-    "detector": None,
-    "clips_count": 0,
-    "last_clip_title": "",
-    "on_clip_callback": None
+MAX_SESSIONS = 3
+
+_sessions = {
+    1: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
+    2: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
+    3: {"active": False, "stream_url": "", "p_stream": None, "p_ffmpeg": None, "detector": None, "clips_count": 0, "last_clip_title": "", "on_clip_callback": None},
 }
 
-def is_live_session_active() -> bool:
-    return _current_session["active"]
+def is_live_session_active(session_id: int = 1) -> bool:
+    return _sessions.get(session_id, {}).get("active", False)
 
-def get_live_session_status() -> dict:
-    detector = _current_session["detector"]
+def get_live_session_status(session_id: int = 1) -> dict:
+    s = _sessions.get(session_id, {})
+    detector = s.get("detector")
     mps = detector.current_mps if detector else 0.0
+    req_mps = detector.required_mps if detector else 0.0
+    viewers = detector.live_viewers if detector else 0
     err = detector.error_message if detector else ""
     return {
-        "active": _current_session["active"],
-        "stream_url": _current_session["stream_url"],
+        "session_id": session_id,
+        "active": s.get("active", False),
+        "stream_url": s.get("stream_url", ""),
         "current_mps": mps,
-        "clips_count": _current_session["clips_count"],
-        "last_clip_title": _current_session["last_clip_title"],
+        "required_mps": req_mps,
+        "viewers": viewers,
+        "clips_count": s.get("clips_count", 0),
+        "last_clip_title": s.get("last_clip_title", ""),
         "error_message": err
     }
 
-def trigger_manual_live_clip() -> tuple[bool, str]:
-    """Permite clipar manualmente os últimos 60 segundos do buffer sem depender do pico de chat."""
-    if not _current_session["active"]:
-        return False, "Nenhuma live está sendo monitorada no momento."
-    threading.Thread(target=_process_spike_job, args=({"mps": 99.9, "manual": True},), daemon=True).start()
-    return True, "Corte manual solicitado! Processando os últimos 60 segundos do buffer..."
+def get_all_sessions_status() -> list[dict]:
+    return [get_live_session_status(sid) for sid in sorted(_sessions.keys())]
 
-def _process_spike_job(event_data):
+def trigger_manual_live_clip(session_id: int = 1) -> tuple[bool, str]:
+    """Permite clipar manualmente os últimos 60-70 segundos do buffer sem depender do chat."""
+    s = _sessions.get(session_id)
+    if not s or not s["active"]:
+        return False, f"Nenhuma live ativa no Slot #{session_id}."
+    threading.Thread(
+        target=_process_spike_job,
+        args=(session_id, {"mps": 99.9, "manual": True}),
+        daemon=True
+    ).start()
+    return True, f"Corte manual solicitado para Live #{session_id}! Processando buffer..."
+
+def _process_spike_job(session_id: int, event_data: dict):
     is_manual = event_data.get("manual", False)
     mps_val = event_data.get("mps", 0.0)
-    print(f"[LiveOrchestrator] Processando clipe da live (Manual: {is_manual}, MPS: {mps_val:.1f})...")
+    viewers = event_data.get("viewers", 0)
+    print(f"[LiveOrchestrator] [Live #{session_id}] Processando clipe (Manual: {is_manual}, MPS: {mps_val:.1f}, Espectadores: {viewers})...")
     
-    # Se foi disparado por pico de chat, aguarda 12 segundos para a reação do streamer entrar no buffer
+    # Se foi disparado por pico de chat, aguarda 12 segundos para a reação do streamer entrar completamente no buffer
     if not is_manual:
         time.sleep(12)
 
-    video_id = f"live_gta6_{int(time.time())}"
-    raw_snippet = live_stream.LIVE_BUFFER_DIR / f"{video_id}_raw.mp4"
+    video_id = f"live_gta6_s{session_id}_{int(time.time())}"
+    s_dir = live_stream.get_session_buffer_dir(session_id)
+    raw_snippet = s_dir / f"{video_id}_raw.mp4"
+    output_clip_path = CLIPS_DIR / f"{video_id}_vertical.mp4"
 
     try:
-        # 1. Extrai os últimos 60 segundos do buffer circular
-        live_stream.extract_recent_buffer(raw_snippet, num_chunks=6)
+        # 1. Extrai 8 chunks (80 segundos) do buffer circular isolado da sessão
+        live_stream.extract_recent_buffer(raw_snippet, session_id=session_id, num_chunks=8)
 
         # 2. Extrai áudio para o Gemini
         audio_path = clipper.extract_audio(raw_snippet)
 
-        # 3. Analisa momento viral e falas com Gemini
-        gemini_key = load_gemini_key()
-        clips_data = clipper.analyze_scene_with_gemini(audio_path, gemini_key, max_clips=1)
+        # 3. Analisa momento viral e ganchos com Gemini (com fallback para Plano B)
+        clips_data = None
+        try:
+            clips_data = clipper.analyze_scene_with_gemini(audio_path, max_clips=1)
+        except Exception as e:
+            print(f"[LiveOrchestrator] [Live #{session_id}] Gemini indisponível ou cota esgotada ({e}). Ativando Plano B...")
+
         if not clips_data:
-            print("[LiveOrchestrator] Falas não detectadas. Gerando clipe direto com base na ação da live...")
-            clips_data = [{
-                "start_seconds": 10.0,
-                "end_seconds": 55.0,
-                "title": "Momento Insano GTA 6",
-                "caption": "Momento épico ao vivo no GTA 6! #GTA6 #GTA #Clips #Gamer",
-                "subtitles": []
-            }]
+            # PLANO B: Corte Heurístico de Ação (100% Offline / Sem dependência de IA)
+            print(f"[LiveOrchestrator] [Live #{session_id}] Executando Plano B: Corte de ação sem IA...")
+            clip_info = clipper.generate_offline_action_clip(
+                video_path=raw_snippet,
+                output_path=output_clip_path,
+                title=f"GTA 6 Momento Insano (Live #{session_id})",
+                duration_seconds=65.0
+            )
+            title = clip_info["title"]
+            formatted_caption = clip_info["caption"]
+        else:
+            clip_info = clips_data[0]
+            start_s = float(clip_info.get("start_seconds", 5.0))
+            end_s = float(clip_info.get("end_seconds", 70.0))
+            
+            # Garante que no modo monetização tenha pelo menos 61.0 segundos
+            mode = config.load_duration_mode()
+            if mode == "monetization" and (end_s - start_s) < 61.0:
+                end_s = min(78.0, start_s + 63.0)
 
-        clip_info = clips_data[0]
-        output_clip_path = CLIPS_DIR / f"{video_id}_vertical.mp4"
+            clipper.render_vertical_clip(
+                video_path=raw_snippet,
+                start_s=start_s,
+                end_s=end_s,
+                subtitles=clip_info.get("subtitles", []),
+                output_path=output_clip_path
+            )
+            title = clip_info.get("title", f"GTA 6 Live #{session_id} Moment")
+            formatted_caption = format_caption(title, clip_info.get("caption", "#GTA6 #GTA #Viral"))
 
-        # 4. Renderiza em 9:16 com fundo desfocado e legendas animadas
-        clipper.render_vertical_clip(
-            video_path=raw_snippet,
-            start_s=clip_info.get("start_seconds", 0.0),
-            end_s=clip_info.get("end_seconds", 55.0),
-            subtitles=clip_info.get("subtitles", []),
-            output_path=output_clip_path
-        )
+        # 4. DISPARO GARANTIDO TELEGRAM (Canal Primário Obrigatório)
+        tg_cfg = config.load_telegram_config()
+        if tg_cfg.get("bot_token") and tg_cfg.get("chat_id"):
+            print(f"[LiveOrchestrator] [Live #{session_id}] Enviando vídeo para os destinatários do Telegram...")
+            sent_tg = telegram_bot.send_clip_to_telegram(str(output_clip_path), formatted_caption)
+            if sent_tg:
+                print(f"[LiveOrchestrator] [Live #{session_id}] ✅ Vídeo entregue no Telegram com sucesso!")
+            else:
+                print(f"[LiveOrchestrator] [Live #{session_id}] ⚠️ Falha ao entregar no Telegram.")
 
-        title = clip_info.get("title", "GTA 6 Live Moment")
-        formatted_caption = format_caption(title, clip_info.get("caption", "#GTA6 #GTA #Viral"))
-
-        # 5. Entrega multi-canal (E-mail e/ou Telegram)
+        # 5. Entrega secundária por E-mail (se configurado)
         delivery_mode = load_delivery_channel()
-
-        # Envio por E-mail
         if delivery_mode in ["email", "both"]:
-            ok, msg = email_sender.send_clip_by_email(str(output_clip_path), title, formatted_caption)
-            print(f"[LiveOrchestrator] Envio por E-mail: {msg}")
+            email_sender.send_clip_by_email(str(output_clip_path), title, formatted_caption)
 
-        # Envio por Telegram
-        if delivery_mode in ["telegram", "both"]:
-            telegram_bot.send_clip_to_telegram(str(output_clip_path), formatted_caption)
+        s = _sessions[session_id]
+        s["clips_count"] += 1
+        s["last_clip_title"] = title
 
-        _current_session["clips_count"] += 1
-        _current_session["last_clip_title"] = title
-
-        if _current_session["on_clip_callback"]:
-            _current_session["on_clip_callback"]({
+        if s["on_clip_callback"]:
+            s["on_clip_callback"]({
+                "session_id": session_id,
                 "title": title,
                 "caption": formatted_caption,
                 "path": str(output_clip_path)
             })
 
     except Exception as e:
-        print(f"[LiveOrchestrator] Erro ao processar pico da live: {e}")
+        print(f"[LiveOrchestrator] [Live #{session_id}] Erro ao processar clipe: {e}")
     finally:
-        # Limpa o arquivo temporário bruto
         if raw_snippet.exists():
             try:
                 raw_snippet.unlink()
             except Exception:
                 pass
 
-def start_live_session(stream_url: str, on_clip_callback=None) -> tuple[bool, str]:
-    if _current_session["active"]:
-        return False, "Já existe uma sessão de monitoramento de live em andamento."
+def start_live_session(stream_url: str, session_id: int = 1, on_clip_callback=None) -> tuple[bool, str]:
+    if session_id not in _sessions:
+        return False, "ID de sessão inválido (use 1, 2 ou 3)."
+
+    s = _sessions[session_id]
+    if s["active"]:
+        return False, f"A Live #{session_id} já está em andamento."
 
     try:
-        p_stream, p_ffmpeg = live_stream.start_circular_buffer(stream_url)
-        time.sleep(2) # Aguarda inicialização do processo
+        p_stream, p_ffmpeg = live_stream.start_circular_buffer(stream_url, session_id=session_id)
+        time.sleep(2)
         if p_stream.poll() is not None:
-            return False, "Falha ao iniciar captura da live via streamlink (verifique a URL)."
+            return False, f"Falha ao iniciar captura da Live #{session_id} via streamlink (verifique a URL)."
 
         detector = chat_spike.ChatSpikeDetector(stream_url)
-        detector.start(on_spike_callback=lambda evt: threading.Thread(target=_process_spike_job, args=(evt,), daemon=True).start())
+        detector.start(on_spike_callback=lambda evt: threading.Thread(
+            target=_process_spike_job,
+            args=(session_id, evt),
+            daemon=True
+        ).start())
 
-        _current_session["active"] = True
-        _current_session["stream_url"] = stream_url
-        _current_session["p_stream"] = p_stream
-        _current_session["p_ffmpeg"] = p_ffmpeg
-        _current_session["detector"] = detector
-        _current_session["on_clip_callback"] = on_clip_callback
+        s["active"] = True
+        s["stream_url"] = stream_url
+        s["p_stream"] = p_stream
+        s["p_ffmpeg"] = p_ffmpeg
+        s["detector"] = detector
+        s["on_clip_callback"] = on_clip_callback
 
-        return True, "Sessão de monitoramento ao vivo iniciada com sucesso!"
+        return True, f"Monitoramento da Live #{session_id} iniciado com sucesso!"
     except Exception as e:
-        return False, f"Erro ao iniciar sessão: {e}"
+        return False, f"Erro ao iniciar Live #{session_id}: {e}"
 
-def stop_live_session():
-    if not _current_session["active"]:
+def stop_live_session(session_id: int = 1):
+    s = _sessions.get(session_id)
+    if not s or not s["active"]:
         return
 
-    if _current_session["detector"]:
-        _current_session["detector"].stop()
+    if s["detector"]:
+        s["detector"].stop()
 
-    live_stream.stop_circular_buffer(_current_session["p_stream"], _current_session["p_ffmpeg"])
+    live_stream.stop_circular_buffer(s["p_stream"], s["p_ffmpeg"])
 
-    _current_session["active"] = False
-    _current_session["stream_url"] = ""
-    _current_session["p_stream"] = None
-    _current_session["p_ffmpeg"] = None
-    _current_session["detector"] = None
+    s["active"] = False
+    s["stream_url"] = ""
+    s["p_stream"] = None
+    s["p_ffmpeg"] = None
+    s["detector"] = None
+
+def stop_all_sessions():
+    for sid in _sessions:
+        stop_live_session(sid)

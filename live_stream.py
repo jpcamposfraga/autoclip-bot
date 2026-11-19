@@ -7,6 +7,11 @@ from config import BASE_DIR, FFMPEG_BIN, MEDIA_DIR
 LIVE_BUFFER_DIR = MEDIA_DIR / "live_buffer"
 LIVE_BUFFER_DIR.mkdir(parents=True, exist_ok=True)
 
+def get_session_buffer_dir(session_id: int | str = 1) -> Path:
+    s_dir = LIVE_BUFFER_DIR / f"live_{session_id}"
+    s_dir.mkdir(parents=True, exist_ok=True)
+    return s_dir
+
 def _get_streamlink_bin() -> str:
     path = shutil.which("streamlink")
     if path:
@@ -19,10 +24,11 @@ def _get_streamlink_bin() -> str:
 
 STREAMLINK_BIN = _get_streamlink_bin()
 
-def start_circular_buffer(stream_url: str) -> tuple[subprocess.Popen, subprocess.Popen]:
-    """Inicia gravação de buffer circular de ~100s da live em pedaços de 10s."""
-    # Limpa buffer anterior
-    for f in LIVE_BUFFER_DIR.glob("buffer_*.ts"):
+def start_circular_buffer(stream_url: str, session_id: int | str = 1) -> tuple[subprocess.Popen, subprocess.Popen]:
+    """Inicia gravação de buffer circular de ~150s da live em pedaços de 10s em pasta isolada."""
+    s_dir = get_session_buffer_dir(session_id)
+    # Limpa buffer anterior da sessão
+    for f in s_dir.glob("buffer_*.ts"):
         try:
             f.unlink()
         except Exception:
@@ -41,9 +47,9 @@ def start_circular_buffer(stream_url: str) -> tuple[subprocess.Popen, subprocess
         "-c", "copy",
         "-f", "segment",
         "-segment_time", "10",
-        "-segment_wrap", "10",
+        "-segment_wrap", "15", # 15 pedaços de 10s = 150 segundos de buffer
         "-reset_timestamps", "1",
-        str(LIVE_BUFFER_DIR / "buffer_%02d.ts")
+        str(s_dir / "buffer_%02d.ts")
     ]
 
     p_stream = subprocess.Popen(streamlink_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -52,16 +58,17 @@ def start_circular_buffer(stream_url: str) -> tuple[subprocess.Popen, subprocess
 
     return p_stream, p_ffmpeg
 
-def extract_recent_buffer(output_path: Path, num_chunks: int = 6) -> Path:
-    """Junta os últimos N pedaços de 10s (ex: 6 = 60 segundos) sem re-encodamento."""
-    chunks = sorted(list(LIVE_BUFFER_DIR.glob("buffer_*.ts")), key=lambda f: f.stat().st_mtime)
+def extract_recent_buffer(output_path: Path, session_id: int | str = 1, num_chunks: int = 8) -> Path:
+    """Junta os últimos N pedaços de 10s (ex: 8 = 80 segundos) da sessão informada sem re-encodamento."""
+    s_dir = get_session_buffer_dir(session_id)
+    chunks = sorted(list(s_dir.glob("buffer_*.ts")), key=lambda f: f.stat().st_mtime)
     if not chunks:
-        raise RuntimeError("Nenhum pedaço de vídeo encontrado no buffer circular.")
+        raise RuntimeError(f"Nenhum pedaço de vídeo encontrado no buffer circular da sessão {session_id}.")
 
     # Pega os últimos chunks completos (ignora o último que pode estar sendo escrito agora)
     selected = chunks[-num_chunks - 1 : -1] if len(chunks) > num_chunks else chunks
 
-    concat_file = LIVE_BUFFER_DIR / "concat_list.txt"
+    concat_file = s_dir / "concat_list.txt"
     lines = [f"file '{c.resolve().as_posix()}'" for c in selected]
     concat_file.write_text("\n".join(lines), encoding="utf-8")
 

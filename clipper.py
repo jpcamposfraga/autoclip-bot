@@ -40,37 +40,61 @@ FALLBACK_MODELS = [
     "gemini-2.5-pro"
 ]
 
-def analyze_scene_with_gemini(audio_path: Path, api_key: str, max_clips: int = 3, status_callback=None) -> list[dict]:
-    client = genai.Client(api_key=api_key)
-    audio_file = client.files.upload(file=str(audio_path))
-    
-    prompt = f"""You are an expert viral movie clip editor for TikTok, YouTube Shorts, and Instagram Reels.
-Analyze this movie scene audio. Identify up to {max_clips} distinct, non-overlapping engaging viral segments (each 30 to 60 seconds long).
-If the audio is short (under 90 seconds), return only 1 segment.
+def analyze_scene_with_gemini(audio_path: Path, api_key: str = None, max_clips: int = 3, status_callback=None, duration_mode: str = None) -> list[dict]:
+    import config
+    keys = config.load_gemini_keys_pool()
+    if api_key and api_key not in keys:
+        keys.insert(0, api_key)
+    if not keys:
+        raise RuntimeError("Nenhuma chave do Gemini API configurada.")
+
+    mode = duration_mode or config.load_duration_mode()
+    if mode == "monetization":
+        dur_instruction = "IMPORTANT: Each clip MUST BE AT LEAST 61.0 SECONDS (target duration: 61 to 75 seconds) for TikTok Creator Rewards monetization qualification. Do not make clips under 61 seconds."
+    elif mode == "traction":
+        dur_instruction = "Target clip duration: 30 to 45 seconds (punchy, high-retention hook)."
+    else: # hybrid
+        dur_instruction = "Target clip duration: 70% of clips should be >= 61.0 seconds (61 to 75s for monetization), and 30% between 30 and 45 seconds for viral traction."
+
+    prompt = f"""You are an expert viral video editor for TikTok, YouTube Shorts, and Instagram Reels.
+Analyze this audio from a live stream / gameplay. Identify up to {max_clips} distinct, non-overlapping engaging viral segments.
+{dur_instruction}
+If the audio is short (under 90 seconds), return only 1 best segment.
 Ensure segments do NOT overlap (keep at least 3 seconds between segments).
 
 Return ONLY a JSON object adhering to this structure:
 {{
   "clips": [
     {{
-      "start_seconds": 12.5,
-      "end_seconds": 58.0,
-      "title": "When he realized who was behind the door...",
-      "caption": "Unbelievable scene from the movie. Wait for the end! #movies #cinema #viral #fyp",
+      "start_seconds": 10.0,
+      "end_seconds": 72.0,
+      "title": "When the mission went completely off the rails...",
+      "caption": "Wait until you see how this ended! 🔥 #GTA6 #GTA #Viral #Gaming #FYP",
       "subtitles": [
-        {{"start": 12.5, "end": 14.0, "text": "Who is there?"}},
-        {{"start": 14.1, "end": 16.2, "text": "You already know."}}
+        {{"start": 10.0, "end": 12.0, "text": "Are you seeing this?"}},
+        {{"start": 12.5, "end": 15.0, "text": "Watch out behind you!"}}
       ]
     }}
   ]
 }}
 """
     last_error = None
+    for current_key in keys:
+        try:
+            client = genai.Client(api_key=current_key)
+            audio_file = client.files.upload(file=str(audio_path))
+            break
+        except Exception as e:
+            last_error = e
+            continue
+    else:
+        raise RuntimeError(f"Falha ao conectar cliente Gemini com as chaves disponíveis: {last_error}")
+
     for model in FALLBACK_MODELS:
-        for attempt in range(1, 4):
+        for attempt in range(1, 3):
             try:
                 if status_callback:
-                    status_callback(f"Analisando com {model} (tentativa {attempt}/3)...")
+                    status_callback(f"Analisando com {model} (tentativa {attempt}/2)...")
                 response = client.models.generate_content(
                     model=model,
                     contents=[audio_file, prompt],
@@ -88,17 +112,45 @@ Return ONLY a JSON object adhering to this structure:
                 
                 # Filter out invalid segments
                 valid_clips = [c for c in clips if c.get("end_seconds", 0) > c.get("start_seconds", 0)]
-                return valid_clips[:max_clips]
+                if valid_clips:
+                    return valid_clips[:max_clips]
             except Exception as e:
                 err_msg = str(e)
                 last_error = e
-                if "503" in err_msg or "429" in err_msg or "high demand" in err_msg.lower():
+                if "503" in err_msg or "429" in err_msg or "quota" in err_msg.lower() or "resource_exhausted" in err_msg.lower():
                     time.sleep(2 * attempt)
                     continue
                 else:
                     break
     
-    raise RuntimeError(f"Todos os modelos do Gemini falharam ou estão indisponíveis temporariamente: {last_error}")
+    raise RuntimeError(f"Todos os modelos do Gemini falharam ou limite de cota atingido: {last_error}")
+
+def generate_offline_action_clip(video_path: Path, output_path: Path, title: str = None, duration_seconds: float = 65.0) -> dict:
+    """Plano B: Gera corte vertical 9:16 de ação centralizado sem depender de IA caso a cota do Gemini acabe."""
+    import config
+    # Determina duração com base no modo
+    mode = config.load_duration_mode()
+    dur = 35.0 if mode == "traction" else max(61.5, float(duration_seconds))
+    
+    # Renderiza vídeo 9:16 com blur usando FFmpeg diretamente
+    render_vertical_clip(
+        video_path=video_path,
+        start_s=5.0,
+        end_s=5.0 + dur,
+        subtitles=[],
+        output_path=output_path
+    )
+    
+    clip_title = title or "GTA 6 MOMENTO INSANO 🔥"
+    clip_caption = config.format_caption(clip_title, "O chat ao vivo foi à loucura com essa cena! #GTA6 #GTA #Viral #Gaming")
+    return {
+        "start_seconds": 5.0,
+        "end_seconds": 5.0 + dur,
+        "title": clip_title,
+        "caption": clip_caption,
+        "path": str(output_path),
+        "is_fallback": True
+    }
 
 def render_clips_batch(video_path: Path, clips_data: list[dict], video_id: str, status_callback=None, on_clip_rendered_callback=None) -> list[dict]:
     rendered = []

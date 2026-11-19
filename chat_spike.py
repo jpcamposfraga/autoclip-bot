@@ -32,6 +32,7 @@ class ChatSpikeDetector:
         self.last_spike_time = 0.0
         self.is_running = False
         self.error_message = ""
+        self._chat_instance = None
         self._thread = None
         self._stop_event = threading.Event()
 
@@ -91,7 +92,9 @@ class ChatSpikeDetector:
             print(f"[ChatSpike] Conectando via pytchat ao YouTube (ID: {yt_id})...")
             try:
                 import pytchat
-                chat = pytchat.create(video_id=yt_id)
+                # interruptable=False é essencial para rodar em thread de background sem erro de signal
+                chat = pytchat.create(video_id=yt_id, interruptable=False)
+                self._chat_instance = chat
                 if not chat.is_alive():
                     self.error_message = "Chat do YouTube indisponível ou live offline."
                     print(f"[ChatSpike] {self.error_message}")
@@ -111,6 +114,7 @@ class ChatSpikeDetector:
                 print(f"[ChatSpike] {self.error_message}")
             finally:
                 self.is_running = False
+                self._chat_instance = None
             return
 
         # 2. Twitch ou outros: fallback para chat-downloader
@@ -140,4 +144,10 @@ class ChatSpikeDetector:
 
     def stop(self):
         self._stop_event.set()
+        if self._chat_instance:
+            try:
+                self._chat_instance.terminate()
+            except Exception:
+                pass
+            self._chat_instance = None
         self.is_running = False
